@@ -1,0 +1,31 @@
+{
+  "width": 1440,
+  "height": 900,
+  "frames": 600,
+  "results": [
+    {
+      "name": "normal",
+      "digest": "d8d0d3413bdcd26cb1aec4a38d2bfa2a7f10d24b095bb9b9d65804c2d5db321b",
+      "fishCount": 18,
+      "foodLeft": 9,
+      "feedsAccepted": 3,
+      "simTime": 10
+    },
+    {
+      "name": "reduced-motion",
+      "digest": "f9f5a930d6fd3b5521aadf68993d778f5ed5056b64feac23d23ec9f7df9cb15c",
+      "fishCount": 18,
+      "foodLeft": 17,
+      "feedsAccepted": 3,
+      "simTime": 10
+    },
+    {
+      "name": "collision-on",
+      "digest": "0645dd9e6d888aa22f707d1745785cde5e5fedc88d8a6a2f85da9ba8d397028b",
+      "fishCount": 18,
+      "foodLeft": 10,
+      "feedsAccepted": 3,
+      "simTime": 10
+    }
+  ]
+}

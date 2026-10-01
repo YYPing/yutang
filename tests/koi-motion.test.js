@@ -1,0 +1,136 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {PondSimulation} from '../src/engine/simulation.js';
+import {KoiRenderer} from '../src/engine/koi-renderer.js';
+import {koiTailAngle, koiPectoralPose, updateSwimMotion} from '../src/engine/koi-motion.js';
+
+test('the flexible spine keeps its length through strong strokes and tight turns', () => {
+  const fish = {...create().fish[0], length:100, swimAmplitude:.105};
+  const lengths=[];
+  for (const turn of [-2,0,2]) for (const phase of [0,.8,1.6,2.4,3.2,4,4.8,5.6]) {
+    Object.assign(fish,{turn,phase,bodyBend:turn*.4});
+    let length=0, previous=painter.bodyPoint(fish,0);
+    for(let i=1;i<=200;i++) { const p=painter.bodyPoint(fish,i/200); length+=Math.hypot(p.x-previous.x,p.y-previous.y); previous=p; }
+    lengths.push(length);
+  }
+  assert.ok(Math.max(...lengths)-Math.min(...lengths)<.5,'Body must bend without stretching like a rubber strip');
+  assert.ok(lengths.every(l=>Math.abs(l-78)<.5),'The nose-to-tail stalk length remains 78% of the fish length');
+});
+
+test('a slow turn bends the rear body instead of rotating a straight fish', () => {
+  const fish={...create().fish[0],length:100,velocity:18,speed:20,turn:1,phase:0};
+  for(let i=0;i<180;i++) updateSwimMotion(fish,1/60,i/60,false);
+  let bent=0;
+  for(let i=0;i<120;i++){fish.phase=i/120*Math.PI*2;bent+=painter.bodyPoint(fish,.25).y}
+  assert.ok(bent/120>6,'The rear body must follow the curved route, visibly away from the head tangent');
+});
+
+test('each scale follows the local body tangent, including on a strong tail stroke', () => {
+  const fish={...create().fish[0],length:100,phase:2,turn:1.5,swimAmplitude:.09};
+  const arcs=[];
+  const renderer=new KoiRenderer({beginPath(){},stroke(){},moveTo(){},quadraticCurveTo(){},lineTo(){},ellipse(...args){arcs.push(args)}});
+  renderer.drawScales(fish);
+  assert.ok(arcs.some(a=>Math.abs(a[4])>.12),'Scales must rotate with the flesh, rather than remain horizontal stickers');
+});
+
+const random = () => .43;
+const painter = new KoiRenderer(null);
+const create = () => new PondSimulation(1600, 1000, {fishCount: 1, season: 'summer'}, random);
+const span = (fish, u) => {
+  const saved = fish.phase, values = [];
+  for (let phase = 0; phase < Math.PI * 2; phase += .01) {
+    fish.phase = phase; values.push(painter.bodyPoint(fish, u).y);
+  }
+  fish.phase = saved;
+  return Math.max(...values) - Math.min(...values);
+};
+
+test('a swimming bend travels from the shoulder toward the tail while the head stays stable', () => {
+  const fish = create().fish[0];
+  const peak = u => {
+    let best = -Infinity, time = 0;
+    for (let phase = 0; phase < Math.PI * 2; phase += .01) {
+      fish.phase = phase;
+      const y = painter.bodyPoint(fish, u).y;
+      if (y > best) { best = y; time = phase; }
+    }
+    return time;
+  };
+  assert.ok(peak(.15) > peak(.65) + .5, 'The tail must receive each stroke after the shoulder');
+  assert.ok(span(fish, .94) < span(fish, .05) * .025, 'Head motion must remain much smaller than tail motion');
+});
+
+test('food rush produces stronger, faster tail strokes and eases back to cruising', () => {
+  const sim = create(), fish = sim.fish[0];
+  Object.assign(fish, {x: 200, y: 500, heading: 0, speed: 20, velocity: 20, targetX: 1400, targetY: 500, wander: 100});
+  for (let i = 0; i < 120; i++) sim.update(1 / 60);
+  const cruise = span(fish, 0), cruisePhase = fish.phase;
+  for (let i = 0; i < 60; i++) sim.update(1 / 60);
+  const cruiseRate = fish.phase - cruisePhase;
+  // ★ F-2.8 感应圈：1600×1000 ⇒ 半径 300px。撒食点必须落在圈内，否则这尾鱼
+  //   根本看不见食物（这正是"圈外正常游"），压根不会冲刺，测试前提就不成立了。
+  //   取 280px —— 圈内可达的最长行程（再远就出圈了）。
+  //   ⚠️ 采样窗口必须在**投喂后 1s**，不是原版的 2s：圈内行程被半径锁死在 300px，
+  //      2s 时鱼已接近食物、速度从 61.7 衰减到 40.9，2s→3s 段的 Δphase 只有巡航的
+  //      1.18 倍，正好卡在 1.2 阈值下面。1s 时 velocity 61.7（3.1× 巡航），窗口内 1.61 倍。
+  sim.feed(480, 500);
+  for (let i = 0; i < 60; i++) sim.update(1 / 60);
+  const rush = span(fish, 0), rushPhase = fish.phase;
+  for (let i = 0; i < 60; i++) sim.update(1 / 60);
+  assert.ok(fish.phase - rushPhase > cruiseRate * 1.2);
+  assert.ok(rush > cruise * 1.2, 'Acceleration should visibly engage the body and tail');
+  sim.food = [];
+  for (let i = 0; i < 300; i++) sim.update(1 / 60);
+  assert.ok(span(fish, 0) < rush * .9, 'The tail should relax after the rush');
+});
+
+test('changing direction does not instantly reverse the fish angular velocity', () => {
+  const sim = create(), fish = sim.fish[0];
+  Object.assign(fish, {x: 700, y: 500, heading: 0, targetX: 950, targetY: 850, wander: 100});
+  for (let i = 0; i < 24; i++) sim.update(1 / 60);
+  let heading = fish.heading; sim.update(1 / 60);
+  const before = (fish.heading - heading) * 60;
+  fish.targetX = 950; fish.targetY = 150;
+  heading = fish.heading; sim.update(1 / 60);
+  const after = (fish.heading - heading) * 60;
+  assert.ok(before > .2);
+  assert.ok(Math.abs(after - before) < .15, 'A new destination must not create a one-frame turn jerk');
+  for (let i = 0; i < 60; i++) sim.update(1 / 60);
+  assert.ok(fish.turn < 0, 'Inertia must still allow the fish to complete its turn');
+});
+
+test('swimming and turns remain consistent between 30 and 60 FPS', () => {
+  const slow = create(), fast = create();
+  for (const sim of [slow, fast]) Object.assign(sim.fish[0], {x: 600, y: 450, heading: 0, targetX: 1200, targetY: 800, wander: 100});
+  for (let i = 0; i < 180; i++) slow.update(1 / 30);
+  for (let i = 0; i < 360; i++) fast.update(1 / 60);
+  const a = slow.fish[0], b = fast.fish[0];
+  assert.ok(Math.hypot(a.x - b.x, a.y - b.y) < 2);
+  assert.ok(Math.abs(a.heading - b.heading) < .025);
+  assert.ok(Math.abs(a.phase - b.phase) < .08);
+  assert.ok(Math.abs(painter.bodyPoint(a, 0).y - painter.bodyPoint(b, 0).y) < .7);
+});
+
+test('tail fin remains tangent to the body throughout a stroke and a turn', () => {
+  const fish = create().fish[0];
+  for (const turn of [-2, 0, 2]) {
+    fish.turn = turn;
+    for (let phase = 0; phase < Math.PI * 2; phase += .2) {
+      fish.phase = phase;
+      const root = painter.bodyPoint(fish, 0), beside = painter.bodyPoint(fish, .0001);
+      const direction = Math.atan2(beside.y - root.y, beside.x - root.x);
+      assert.ok(Math.abs(koiTailAngle(fish) - direction) < .001, 'Fin/body joint should not kink during a tail stroke');
+    }
+  }
+});
+
+test('pectoral fins assist turning and reduced motion softens the swimming stroke', () => {
+  const normal = create(), reduced = create(); reduced.updateOptions({reducedMotion: true});
+  for (let i = 0; i < 180; i++) { normal.update(1 / 60); reduced.update(1 / 60); }
+  assert.ok(span(reduced.fish[0], 0) < span(normal.fish[0], 0) * .8);
+  assert.ok(reduced.fish[0].strokeRate < normal.fish[0].strokeRate * .8);
+  const fish = normal.fish[0]; fish.finPhase = 0;
+  fish.turn = 0; const relaxed = [-1, 1].map(side => koiPectoralPose(fish, side).spread);
+  fish.turn = 1; const turning = [-1, 1].map(side => koiPectoralPose(fish, side).spread);
+  assert.ok(turning[0] < relaxed[0] && turning[1] > relaxed[1]);
+});

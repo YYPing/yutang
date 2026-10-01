@@ -1,0 +1,38 @@
+# Dependencies & build output
+node_modules/
+dist/
+out/
+release/
+work/
+.dist-old-*/
+electron/native/bin/
+.DS_Store
+*.log
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+
+# Binary assets excluded from the text-only source repo
+# (images / audio / native libs are restored locally or via LFS)
+*.png
+*.webp
+*.wav
+*.ico
+*.icns
+*.node
+*.lib
+*.exp
+*.obj
+*.pdf
+
+# Ad-hoc dev / screenshot scripts (not part of the source)
+fps.cjs
+shot-coast.cjs
+shot-day.cjs
+shot-seasons.cjs
+shot-yutang.cjs
+ui-desktop-test.cjs
+wallpaper-test.cjs
+启动桌面版.cmd

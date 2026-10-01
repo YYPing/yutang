@@ -1,0 +1,98 @@
+import {useCallback,useEffect,useMemo,useRef,useState} from 'react';
+import {Fish,Leaf,Cloud,Moon,Sun,Monitor,Settings,Maximize,Minimize,Check,RefreshCw,Minus,EyeOff,X,Hand,Shell,BookOpen,Waves,ChevronDown} from 'lucide-react';
+import Pond from './components/Pond.jsx';
+import CoastScene from './components/CoastScene.jsx';
+import BottlePanel,{BottleIcon} from './components/BottlePanel.jsx';
+import {ThemePanel,BucketPanel,GuidePanel,TidePanel,TongsIcon,TideIcon,PHASE_NAMES,tideTime,tideCountdownLabel} from './components/CoastPanels.jsx';
+import {loadTheme,saveTheme,THEMES} from './themes/registry.js';
+import {Panel} from './components/Panel.jsx';
+import WeatherPanel,{WEATHER} from './components/WeatherPanel.jsx';
+import SeasonPanel,{SEASONS} from './components/SeasonPanel.jsx';
+import SettingsPanel from './components/SettingsPanel.jsx';
+import KoiStudio from './components/KoiStudio.jsx';
+import {loadSettings,loadFish,writeStore} from './lib/storage.js';
+import {loadPondSave,writePondSave,writePondSaveSync,clearPondSave,SAVE_ENVELOPE_VERSION} from './lib/save-store.js';
+import {acceleratorLabel} from './lib/platform.js';
+import {useEnvironment} from './hooks/useEnvironment.js';
+import {useAmbient} from './hooks/useAmbient.js';
+function FeedIcon(){return <svg width="25" height="25" viewBox="0 0 28 28" fill="none" stroke="currentColor" strokeWidth="1.4"><circle cx="14" cy="6.5" r="4"/><circle cx="7" cy="20" r="4"/><circle cx="22" cy="20" r="4"/></svg>}
+/** F-14.2.5 归来摘要的时间跨度：不足一天只报小时（「你离开了 3 小时」比「0 天 3 小时」自然）。*/
+function awaySpan(ms){const total=Math.max(1,Math.round(ms/60000));const days=Math.floor(total/1440),hours=Math.floor((total%1440)/60);return days>0?`${days} 天 ${hours} 小时`:`${total<60?`${total} 分钟`:`${hours} 小时`}`}
+export default function App(){
+ const [settings,setSettings]=useState(()=>{const s=loadSettings();try {if(!localStorage.getItem('fusheng-settings'))s.reducedMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;} catch {}return s}),[fish,setFish]=useState(loadFish),[panel,setPanel]=useState(null),[immersive,setImmersive]=useState(false),[paused,setPaused]=useState(false),[toast,setToast]=useState(''),[desktop,setDesktop]=useState(null),[windowBusy,setWindowBusy]=useState(false);const pond=useRef(null),timer=useRef(null);
+ const [feedHint,setFeedHint]=useState(false);const feedHintTimer=useRef(null);
+ const [theme,setTheme]=useState(loadTheme),[coastView,setCoastView]=useState(null),[coastMode,setCoastMode]=useState('observe');
+ const [bottleLetter,setBottleLetter]=useState(null);
+ const openBottle=useCallback(letter=>{setBottleLetter(letter.id);setPanel('bottles')},[]);
+ const isCoast=theme==='coast';
+ const [pageVisible,setPageVisible]=useState(()=>!document.hidden);
+ useEffect(()=>{const changed=()=>setPageVisible(!document.hidden);document.addEventListener('visibilitychange',changed);return()=>document.removeEventListener('visibilitychange',changed)},[]);
+ const env=useEnvironment(settings);const ambient=useAmbient(settings.sound&&!paused&&pageVisible,settings.volume,env.weather,env.season,env.night,theme);
+ const notify=useCallback(text=>{setToast(text);clearTimeout(timer.current);timer.current=setTimeout(()=>setToast(''),3300)},[]);
+ function selectTheme(id){if(id===theme){setPanel(null);return}if(!saveTheme(id))notify('主题暂未保存，下次启动将使用之前的风景。');setPanel(null);setPaused(false);setCoastMode('observe');setCoastView(null);setTheme(id)}
+ const update=useCallback((key,value)=>setSettings(s=>({...s,[key]:value})),[]);const closePanel=useCallback(()=>setPanel(null),[]);
+ // F-2.6：到 200 粒上限时这一把不撒，并按需求给提示。feed() 现在返回 {ok, capped}。
+ const feedPond=useCallback(()=>{const result=pond.current?.feed();if(result?.capped){notify('这一把够了 —— 水里还有 200 粒没吃完');return}notify('一把鱼食，一池欢喜')},[notify]);
+ // 画布点击投喂不走上面的提示（点水面就该安静），只在「撒不下」时吭一声。
+ const onFeedResult=useCallback((result)=>{if(result){setFeedHint(false);if(result.capped)notify('这一把够了 —— 水里还有 200 粒没吃完')}},[notify]);
+ useEffect(()=>{if(!writeStore('fusheng-settings',settings))notify('存储空间不足，当前设置仅保留到本次关闭。')},[settings,notify]);
+ useEffect(()=>()=>clearTimeout(timer.current),[]);
+ useEffect(()=>{const bridge=window.pondDesktop;if(!bridge)return;let lastMode=false,active=true;const receive=state=>{if(!active)return;setDesktop(state);if(state.desktopMode!==lastMode){lastMode=state.desktopMode;if(state.desktopMode)setPanel(null);setImmersive(state.desktopMode);if(state.desktopMode){setFeedHint(true);clearTimeout(feedHintTimer.current);feedHintTimer.current=setTimeout(()=>setFeedHint(false),12000)}else setFeedHint(false)}};bridge.getState().then(receive);const off=bridge.onState(receive);return()=>{active=false;off()}},[]);
+ useEffect(()=>{function onKey(e){if(e.key!=='Escape'&&e.target.closest('input,textarea,select,button,a,[role="button"],[contenteditable="true"]'))return;if(e.key==='Escape'){if(panel)setPanel(null);else if(immersive)setImmersive(false)}if(e.code==='Space'&&!panel){e.preventDefault();if(!isCoast)feedPond()}if(e.key.toLowerCase()==='h'&&!panel)setImmersive(v=>!v)}window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey)},[panel,immersive,isCoast,feedPond]);
+ // §14 存档：生态模式必须**先读到档再建世界**。
+ // ★ 为什么不能「先渲染、再把存档灌进去」：PondEngine 只在首次挂载时读一次 options，
+ //   晚到的存档不生效，而且紧接着的自动保存会把这份「新池」写回磁盘 —— 用户的档被静默清空。
+ //   代价是加载期间少渲染一个 <Pond/>：IPC 读几 KB JSON 通常 <20ms，看不出等待。
+ //   ⚠️ 这个 state 必须声明在下面的 options useMemo **之前** —— deps 数组在调用那一刻求值，
+ //      声明在后会踩 TDZ（ReferenceError），整棵树白屏。
+ const [initialSave,setInitialSave]=useState(undefined);   // undefined=加载中 · null=确实没有存档
+ // 生态模式下**不**把 fishCount 放进 options —— 那边的滑杆是「重置为 N 尾」的选择器，
+ // 不是实时参数；真的重置由设置面板的按钮显式触发（见 onResetPopulation）。
+ // 否则任何一次设置变更（甚至挂载）都会把池塘整个推倒重来。
+ const options=useMemo(()=>{const o={season:env.season,weather:env.weather,night:env.night,paused,desktopMode:!!desktop?.desktopMode,reducedMotion:settings.reducedMotion,fishSize:settings.fishSize,turtleCount:settings.turtleCount,quality:settings.quality,solarTerm:env.solarTerm,ecoMode:!!settings.ecoMode,ecoSpeed:settings.ecoSpeed,collision:settings.collision!==false,onThunder:ambient.thunder};if(!settings.ecoMode)o.fishCount=settings.fishCount;else if(initialSave?.pond)o.ecoSnapshot={...initialSave.pond,lastSeenWallClock:initialSave.lastSeenWallClock};return o},[env.season,env.weather,env.night,paused,settings.reducedMotion,settings.fishCount,settings.fishSize,settings.turtleCount,settings.quality,settings.ecoMode,settings.ecoSpeed,settings.collision,initialSave,env.solarTerm,desktop?.desktopMode,ambient.thunder]);
+ function saveFish(f){const next=[...fish,f];if(!writeStore('fusheng-fish',next)){notify('存储空间不足，未能保存这尾锦鲤。');return}setFish(next);setPanel(null);notify(`${f.name}已游入池塘，下次见面它还在。`)}
+ function removeFish(id){const next=fish.filter(f=>f.id!==id);if(writeStore('fusheng-fish',next)){setFish(next);notify('锦鲤已从池塘移走')}}
+ function resizeFish(id,size){const next=fish.map(f=>f.id===id?{...f,size}:f);if(writeStore('fusheng-fish',next))setFish(next);else notify('存储空间不足，未能保存大小。')}
+ async function desktopAction(action,value){setWindowBusy(true);try{const result=await window.pondDesktop[action](value);if(result){setDesktop(result);if(action==='setDesktopMode'&&result.message)notify(result.message)}}catch{notify('窗口操作未完成，请从菜单栏重试。')}finally{setWindowBusy(false)}}
+ const getStats=useCallback(()=>pond.current?.stats(),[]);
+ const [awayReport,setAwayReport]=useState(null);
+ useEffect(()=>{let alive=true;loadPondSave().then(({envelope})=>{if(alive)setInitialSave(envelope??null)}).catch(()=>{if(alive)setInitialSave(null)});return()=>{alive=false}},[]);
+ const pondReady=!settings.ecoMode||initialSave!==undefined;
+ // 生态模式下鱼的数量不再由滑杆决定，所以左下角要读引擎的真实存活数。
+ // 1.5s 轮询足够（池塘日推进极慢），且省掉一整套从引擎往上的状态回传。
+ const [ecoInfo,setEcoInfo]=useState(null);
+ useEffect(()=>{if(!settings.ecoMode||isCoast||!pondReady){setEcoInfo(null);return}const read=()=>{setEcoInfo(pond.current?.stats()?.eco||null);const report=pond.current?.takeAwayReport?.();if(report)setAwayReport(report)};read();const id=setInterval(read,1500);return()=>clearInterval(id)},[settings.ecoMode,isCoast,pondReady]);
+ // §14.1 自动保存：30s 一次 + 页面隐藏时 + 关闭前。
+ // ★ 关闭前那次走**同步**通道（localStorage）—— IPC 是异步的，窗口关掉那一刻发出去的请求
+ //   大概率赶不上落盘；而每 30s 的常规 tick 会把两条通道都刷新，所以即使被强杀也只丢 ≤30s。
+ const buildEnvelope=useCallback(()=>{const snapshot=pond.current?.snapshot?.();if(!snapshot)return null;return {schemaVersion:SAVE_ENVELOPE_VERSION,lastSeenWallClock:Date.now(),pond:snapshot,preferences:{ecoMode:!!settings.ecoMode,ecoSpeed:settings.ecoSpeed}}},[settings.ecoMode,settings.ecoSpeed]);
+ useEffect(()=>{if(!settings.ecoMode)return;const tick=()=>{const envelope=buildEnvelope();if(envelope)writePondSave(envelope)};const id=setInterval(tick,30000);const onVisibility=()=>{if(document.hidden)tick()};const onUnload=()=>{const envelope=buildEnvelope();if(envelope)writePondSaveSync(envelope)};document.addEventListener('visibilitychange',onVisibility);window.addEventListener('beforeunload',onUnload);return()=>{clearInterval(id);document.removeEventListener('visibilitychange',onVisibility);window.removeEventListener('beforeunload',onUnload)}},[settings.ecoMode,buildEnvelope]);
+ const WeatherIcon=WEATHER[env.weather]?.Icon||Sun;const hidden=immersive||desktop?.desktopMode;
+ return <main className={`app theme-${theme} season-${env.season} ${env.night?'night':'day'} weather-${env.weather} ${hidden?'immersive':''} ${desktop?`native-app platform-${desktop.platform}`:''}`}>
+  {ambient.tracks.map(track=><audio key={track.id} data-ambient={track.id} ref={track.ref} src={track.url} loop={track.loop} preload="none" hidden aria-hidden="true"/>)}<div className="pond-background"/><div className="scene-light"/>{isCoast?<CoastScene key="coast" ref={pond} options={options} desktop={desktop} mode={coastMode} onChange={setCoastView} notify={notify} onBottle={openBottle}/>:pondReady?<Pond key="koi" ref={pond} options={options} fish={fish} desktop={desktop} onFeed={onFeedResult}/>:null}<div className="edge-shade"/>
+  <div className="hud"><header className="topbar"><div className="brand"><span className="brand-symbol">{isCoast?<Waves size={34} strokeWidth={1.5}/>:<Fish size={34} strokeWidth={1.5}/>}</span><div><h1>浮生</h1><button className="theme-trigger" aria-label="切换主题" onClick={()=>setPanel('theme')}>{THEMES.find(t=>t.id===theme).name}<ChevronDown size={13}/></button></div></div>{isCoast?<div className="weather-badge coast-weather-badge" aria-label="海边天气"><WeatherIcon size={23}/><span>{env.city.name}</span><strong>{env.data?`${Math.round(env.data.temperature)}°`:'—°'}</strong><span className="weather-label">{settings.weather==='auto'?(env.status==='live'?env.data.description:env.status==='loading'?'获取中':env.status==='cached'?'缓存':'离线'):WEATHER[env.weather].name}</span></div>:<button className="weather-badge" onClick={()=>setPanel('weather')} aria-label="打开天气设置"><WeatherIcon size={23}/><span>{env.city.name}</span><strong>{env.data?`${Math.round(env.data.temperature)}°`:'—°'}</strong><span className="weather-label">{settings.weather==='auto'?(env.status==='live'?env.data.description:env.status==='loading'?'获取中':env.status==='cached'?'缓存':'离线'):WEATHER[env.weather].name}</span></button>}</header>
+  <div className="poem"><span className="poem-line"/><p>{isCoast?'潮来潮往':'一池清欢'}</p><span className="poem-line"/><small>{isCoast?'等一阵潮，拾一点欢喜。':'把日子，慢慢游成诗。'}</small></div>
+  <div className="scene-status"><p>{isCoast?'一湾浅海，半日清闲':<>{SEASONS[env.season].label}<i/> {env.night?'夜色':'白昼'} <span className="solar-term">· {env.solarTerm}</span></>}</p><span>{isCoast?`贝壳 ${coastView?.shells||0} 枚 · 小桶 ${coastView?.bucket?.length||0}/12`:<>{settings.ecoMode&&ecoInfo?`${ecoInfo.alive+fish.length} 尾锦鲤 · 第 ${ecoInfo.maxGeneration} 代`:`${fish.length+settings.fishCount} 尾锦鲤`} {settings.turtleCount>0&&`· ${settings.turtleCount} 只小乌龟`}</>} {paused&&'· 静止片刻'}</span></div>
+  {isCoast&&<button className="tide-badge" aria-label="潮汐信息" onClick={()=>setPanel('tide')}><TideIcon size={19}/><span><strong>{PHASE_NAMES[coastView?.tide?.phase]||'涨潮中'}</strong><small>{tideCountdownLabel(coastView?.tide)} {tideTime(coastView?.tide?.remainingSeconds)}</small></span><meter min="0" max="1" value={coastView?.tide?.level||0} aria-label="潮位"/></button>}
+  <div className="dock-wrap"><p className="feed-hint"><span/>{isCoast?(coastMode==='catch'?'钳子拾贝、抓鱼；游鱼会躲闪，搁浅一捡即得':'长按沙滩，画下心情；轻点小瓶，拾起一封来信'):'轻点水面，投下一份小小欢喜'}<span/></p><nav className="dock" aria-label={isCoast?'赶海工具栏':'池塘工具栏'}>
+    {isCoast?<><button className={coastMode==='catch'?'active':''} aria-label={coastMode==='catch'?'捕捉模式，点击切回观察':'观察模式，点击切换捕捉'} aria-pressed={coastMode==='catch'} onClick={()=>{setCoastMode(v=>v==='catch'?'observe':'catch');setPanel(null)}}>{coastMode==='catch'?<TongsIcon/>:<Hand/>}<span>{coastMode==='catch'?'捕捉':'观察'}</span></button><button className={panel==='bucket'?'active':''} onClick={()=>setPanel('bucket')}><Shell/><span>小桶{coastView?.bucket?.length>0&&<b className="dock-count">{coastView.bucket.length}</b>}</span></button><button className={panel==='guide'?'active':''} onClick={()=>setPanel('guide')}><BookOpen/><span>图鉴</span></button></>:<><button onClick={()=>feedPond()}><FeedIcon/><span>投食</span></button><button className={panel==='season'?'active':''} onClick={()=>setPanel(panel==='season'?null:'season')}><Leaf/><span>四时</span></button></>}
+    {isCoast?<><button className={`tide-tool ${panel==='tide'?'active':''}`} aria-label="潮汐" onClick={()=>setPanel(panel==='tide'?null:'tide')}><TideIcon/><span>潮汐</span></button><button className={panel==='bottles'?'active':''} aria-label="漂流瓶" onClick={()=>{setBottleLetter(null);setPanel(panel==='bottles'?null:'bottles')}}><BottleIcon/><span>漂流瓶</span></button></>:<><button className={panel==='weather'?'active':''} onClick={()=>setPanel(panel==='weather'?null:'weather')}><Cloud/><span>天气</span></button><button className={panel==='day'?'active':''} onClick={()=>setPanel(panel==='day'?null:'day')}>{env.night?<Sun/>:<Moon/>}<span>日夜</span></button></>}{!isCoast&&<button className={panel==='studio'?'active':''} onClick={()=>setPanel('studio')}><Fish/><span>画锦鲤</span></button>}<button className={panel==='settings'?'active':''} onClick={()=>setPanel(panel==='settings'?null:'settings')}><Settings/><span>设置</span></button></nav></div>
+  <div className="scene-actions"><button className="desktop-button" disabled={windowBusy} aria-label="桌面模式" title={desktop?.desktopSupported?`进入桌面模式 · ${acceleratorLabel(desktop.shortcut,desktop.platform)} 恢复控制`:'桌面模式'} onClick={()=>desktop?.desktopSupported?desktopAction('setDesktopMode',true):setPanel('desktop')}><Monitor/><span>桌面</span></button><button className="immersive-button" onClick={()=>{setImmersive(true);notify('已收起界面 · 按 Esc 或右下角按钮返回')}}><Maximize size={18}/><span>沉浸</span></button></div></div>
+  {desktop&&!desktop.desktopMode&&<div className="window-bar"><div className="window-drag" title="拖动这里移动窗口；拖动窗口边缘调整大小"/><div className="window-actions" role="group" aria-label="窗口控制"><button disabled={windowBusy} aria-label={desktop.fullScreen?'退出全屏':'窗口全屏'} title={desktop.fullScreen?'退出全屏':'全屏'} onClick={()=>desktopAction('setFullScreen',!desktop.fullScreen)}>{desktop.fullScreen?<Minimize size={15}/>:<Maximize size={15}/>}</button><button aria-label="最小化窗口" title="最小化" onClick={()=>desktopAction('minimize')}><Minus size={16}/></button><button aria-label="隐藏窗口" title="隐藏 · 菜单栏锦鲤图标恢复" onClick={()=>desktopAction('hide')}><EyeOff size={16}/></button><button className="window-close" aria-label="关闭程序" title="关闭程序" onClick={()=>desktopAction('quit')}><X size={17}/></button></div></div>}
+  {hidden&&!desktop?.desktopMode&&<button className="restore-button" aria-label="退出沉浸模式" onClick={()=>setImmersive(false)}><Minimize size={19}/></button>}
+  {toast&&<div className="toast" role="status"><Check size={16}/>{toast}</div>}
+  {feedHint && desktop?.desktopMode && <div className="feed-hint-desktop" role="status">移动鼠标到池塘上 · 按 Ctrl+Shift+F 撒食，鱼群会游过来抢食</div>}
+  {panel==='theme'&&<ThemePanel theme={theme} onSelect={selectTheme} onClose={closePanel}/>}
+  {isCoast&&panel==='bucket'&&<BucketPanel view={coastView} onRelease={v=>pond.current?.release(v)} onClose={closePanel}/>}
+  {isCoast&&panel==='guide'&&<GuidePanel view={coastView} onClose={closePanel}/>}
+  {isCoast&&panel==='tide'&&<TidePanel view={coastView} onDirection={direction=>{setPaused(false);pond.current?.tideDirection(direction)}} onDebug={(a,v)=>pond.current?.debug?.(a,v)} onClose={closePanel}/>}
+  {isCoast&&panel==='bottles'&&<BottlePanel view={coastView?.bottles} selectedId={bottleLetter} onDraft={value=>pond.current?.bottles?.draft(value)} onSend={value=>{const result=pond.current?.bottles?.send(value);if(result?.ok)setPanel(null);return result}} onClose={closePanel}/>}
+  {panel==='weather'&&<WeatherPanel env={env} mode={settings.weather} onChange={v=>update('weather',v)} onClose={closePanel} notify={notify}/>}
+  {panel==='desktop'&&<Panel title="让风景，住进桌面" subtitle="轻轻流动，陪你做自己的事。" onClose={closePanel}><div className="desktop-notice"><Monitor size={25}/><div><strong>{desktop?'当前系统暂不支持桌面风景':'请打开「浮生锦鲤池」桌面应用'}</strong><p>{desktop?'可以先在这里收起界面，安静看风景。':'在桌面应用首页点「桌面」，当前风景就会铺在桌面图标下方，鼠标操作照常。浏览器内可以先体验沉浸模式。'}</p></div></div><p className="shortcut-note">桌面应用中按 {acceleratorLabel(desktop?.shortcut||'CommandOrControl+Shift+K',desktop?.platform)}，或点菜单栏锦鲤图标，可随时恢复控制。</p><button className="primary-button" onClick={()=>{setPanel(null);setImmersive(true)}}><Maximize size={18}/>先体验沉浸模式</button></Panel>}
+  {panel==='season'&&<SeasonPanel mode={settings.season} current={env.season} solarTerm={env.solarTerm} onChange={v=>update('season',v)} onClose={closePanel}/>}
+  {panel==='day'&&<Panel title="日升月落，各有温柔" subtitle={isCoast?'晨光落在潮线，夜色映入浅海。':'白日有蝶，入夜有萤。'} onClose={closePanel}><div className="day-choices">{[{id:'auto',name:'跟随日夜',desc:'依据城市天气与本机时间',Icon:RefreshCw},{id:'day',name:'留住白昼',desc:isCoast?'晨光轻落，海浪细语':'阳光轻落，蝴蝶翩跹',Icon:Sun},{id:'night',name:isCoast?'一海星光':'一池星光',desc:isCoast?'月色随潮，晚风徐徐':'晚风徐徐，流萤点点',Icon:Moon}].map(({id,name,desc,Icon})=><button className={settings.day===id?'selected':''} key={id} onClick={()=>update('day',id)}><Icon size={25}/><span><strong>{name}</strong><small>{desc}</small></span>{settings.day===id&&<Check size={18}/>}</button>)}</div></Panel>}
+  {panel==='studio'&&<KoiStudio onClose={closePanel} onSave={saveFish} fish={fish} onRemove={removeFish} onResize={resizeFish} turtleCount={settings.turtleCount} onTurtles={v=>update('turtleCount',v)}/>}
+  {panel==='settings'&&<SettingsPanel theme={theme} onSeason={()=>setPanel('season')} soundStatus={ambient.status} soundDescription={ambient.description} getStats={getStats} settings={settings} update={update} paused={paused} setPaused={setPaused} desktop={desktop} onDesktop={v=>desktopAction('setDesktopMode',v)} onGlobal={v=>desktopAction('setGlobalInteraction',v)} onLogin={v=>desktopAction('setLaunchAtLogin',v)} onResetPopulation={n=>{pond.current?.resetEcoFully?.(n);clearPondSave();const envelope=buildEnvelope();if(envelope)writePondSave(envelope);notify(`池塘已重置为 ${n} 尾，从头开始`)}} onClose={closePanel} notify={notify}/>}
+  {awayReport&&<Panel title="池塘里的这些日子" subtitle="你不在这段时间，池子也在自己过。" onClose={()=>setAwayReport(null)}><p className="away-lead">你离开了 <strong>{awaySpan(awayReport.awayMs)}</strong>。</p><div className="eco-status"><span>新生 <b>{awayReport.born}</b> 尾</span><span>离世 <b>{awayReport.died}</b> 尾</span><span>最高第 <b>{awayReport.maxGeneration}</b> 代</span><span>池子又走了 <b>{awayReport.pondDays}</b> 池塘日</span><span>现存 <b>{awayReport.alive}</b> 尾</span></div>{awayReport.capped&&<p className="inline-note">离开超过 30 天，中间那段没有补算 —— 池子只走了最近 30 天。</p>}<button className="primary-button" onClick={()=>setAwayReport(null)}>知道了</button></Panel>}
+ </main>
+}

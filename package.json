@@ -1,0 +1,105 @@
+{
+  "name": "fusheng-koi-pond",
+  "version": "2.4.1",
+  "private": true,
+  "type": "module",
+  "description": "浮生 · 摸鱼桌面，锦鲤与赶海",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "node --test tests/*.test.js",
+    "test:eco": "node tools/validate.js",
+    "test:eco:all": "node tools/validate.js --all",
+    "test:eco:bridge": "node tools/smoke-eco-bridge.js",
+    "test:save": "node tools/smoke-save.js",
+    "test:verify": "node --test tests/*.test.js && node tools/smoke-save.js && node tools/smoke-eco-bridge.js && node tools/check-feedcircle.js && node tools/check-stage-look.js && node tools/trace-motion.js && node tools/validate.js",
+    "check:dead": "node tools/dead-constants.js",
+    "check:feedcircle": "node tools/check-feedcircle.js",
+    "check:feedcoupling": "node tools/probe-feed-coupling.js",
+    "check:feed:ui": "bash tools/check-feed-full.sh",
+    "check:save": "node tools/check-save-ui.cjs",
+    "check:save:full": "bash tools/check-save-full.sh",
+    "check:boot": "node tools/check-boot-ui.cjs",
+    "check:location": "node tools/check-location-ui.cjs",
+    "check:light": "node tools/check-light.js",
+    "check:light:break": "node tools/_light-break.js",
+    "check:light:ui": "node tools/check-light-ui.cjs",
+    "sun:ab": "node tools/shot-sunlight-ab.cjs",
+    "sun:scan": "python tools/scan-sunlight.py",
+    "eco:tune": "node tools/tune.js",
+    "desktop": "pnpm build && pnpm build:native && electron .",
+    "desktop:local": "node tools/launch-desktop.cjs",
+    "package:mac": "pnpm build && pnpm build:native && electron-builder --mac dir --arm64",
+    "build:native": "node electron/build-native.cjs",
+    "test:desktop": "node --test electron/policy.test.cjs",
+    "test:performance": "node electron/performance-smoke.cjs --matrix",
+    "test:weather": "node electron/weather-smoke.cjs",
+    "test:interaction": "node electron/interaction-smoke.cjs",
+    "test:creatures": "node electron/creatures-smoke.cjs",
+    "test:water": "node electron/graphics-1.6-smoke.cjs",
+    "test:wind": "node electron/wind-playback-1.5.cjs",
+    "test:polish": "node electron/polish-1.7-smoke.cjs",
+    "test:studio": "node electron/studio-1.8-smoke.cjs",
+    "test:sound": "node electron/sound-1.9-smoke.cjs",
+    "test:windows": "node electron/window-habitat-1.10-smoke.cjs",
+    "test:swim": "node electron/swim-1.11-smoke.cjs",
+    "test:coast": "node electron/coast-smoke.cjs",
+    "test:coast-scene": "node electron/coast-scene-2.3-smoke.cjs",
+    "test:bottles": "node electron/coast-bottle-smoke.cjs",
+    "test:capture": "node electron/coast-capture-smoke.cjs",
+    "check:stage-look": "node tools/check-stage-look.js",
+    "check:motion": "node tools/trace-motion.js",
+    "check:motion:record": "node tools/trace-motion.js --record",
+    "check:head": "node tools/measure-head-profile.cjs",
+    "check:barbels": "node tools/check-koi-barbels.cjs",
+    "check:collision:ui": "node tools/check-collision-ui.cjs",
+    "probe:school": "node tools/probe-school.js",
+    "check:desktop": "node tools/check-desktop-boot.cjs",
+    "check:rings": "node tools/check-water-rings.js"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "lucide-react": "^0.468.0"
+  },
+  "devDependencies": {
+    "vite": "^7.0.0",
+    "@vitejs/plugin-react": "^4.5.0",
+    "electron": "^37.0.0",
+    "electron-builder": "^26.0.12",
+    "@playwright/test": "^1.55.0"
+  },
+  "build": {
+    "appId": "studio.fusheng.koi",
+    "productName": "浮生锦鲤池",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/*.cjs",
+      "package.json"
+    ],
+    "mac": {
+      "icon": "electron/assets/app-icon.icns",
+      "minimumSystemVersion": "12.0",
+      "category": "public.app-category.entertainment",
+      "target": "dir",
+      "identity": "-",
+      "notarize": false
+    },
+    "asar": true,
+    "extraResources": [
+      {
+        "from": "electron/native/bin",
+        "to": "native",
+        "filter": [
+          "pond-window.node",
+          "pond-pointer"
+        ]
+      }
+    ]
+  }
+}
