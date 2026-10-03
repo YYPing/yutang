@@ -280,12 +280,30 @@ options.almanacProfile             ← App.jsx options（构造段 + 依赖数�
 - 相邻档中位差 1.63%，同季节组内最小 0.29%（惊蛰→春分），噪声底 **0.000%**
 - 荷叶画面占地与档案 `leafCount` 的 Spearman **ρ = 0.996**（24 档）
 
-### 量具（两支，缺一不可）
-- `npm run check:terms` → `tools/probe-terms.mjs`：参数级，39 项
-- `node tools/shot-terms-ui.cjs`：像素级，16 项（需 dev server 在 5188）
+### 量具（三支，各验一层，缺一不可）
+| 工具 | 层 | 项数 | 前置 |
+|---|---|---|---|
+| `npm run check:terms` → `tools/probe-terms.mjs` | 参数级（读引擎档案） | 39 | 无 |
+| `node tools/shot-terms-ui.cjs` | 像素级（浏览器 dev，能冻结） | 16 | dev server 5188 |
+| `npm run check:terms:desktop` → `tools/verify-terms-desktop.cjs` | 像素级（**打包后 dist + 真 Electron 窗口**） | 10 | `npm run desktop:local` |
 
 ★ 像素量具的 ⑤ 用**对照差分**而非读引擎参数：同档截两张（正常 / 强制 `leaf=lotus=0`），
 差出来的就是荷叶真实占地。读参数 ⇒ 被破坏的**门控**看不见（引擎档案没坏，坏的是"让不让画"）。
+
+★ 桌面版**不能冻结**：`Pond.jsx:10` 的 `window.__pondEngine` 被 `import.meta.env.DEV` 门控，
+生产包整块 tree-shake 掉（刻意设计：不留调试开关）。⇒ 改用**静止像素掩膜**：
+每档连截两张，自比出"哪些像素在动"（鱼+水面），档间差只在**两档都静止的像素交集**上统计。
+实测静止占比 90.6~96.6%、静止区噪声底 **0.0000%（8 档全部）**。
+`MOVE_TH=4` 是从自比差的**双峰**量出来的（p50=0、p90=2~3 水面呼吸 / p99=60~113 鱼），不是拍的。
+
+### ★ 跨季与同季必须分开判
+| 类型 | 对数 | 桌面实测 | 判什么 |
+|---|---|---|---|
+| 跨季 | 4 | 91.6%~94.6% | 底图按 `season` 四值索引换图（`landscape.js:139`）⇒ **应当很大**，这是 A 方案的设计前提 |
+| 同季 | 4 | 0.72%~39.2% | 只有 tint + 六维档案在动 ⇒ 这才是 A 方案要解的问题 |
+
+`芒种→夏至 39.2%` 偏大不是缺陷：`ring=min(1,pads/22)` 是**整簇缩放因子**（21/22 vs 1.0），
+整簇荷叶位置+大小全变。但**不能拿它当"同季渐变有效"的证据** —— 证据是上表同季那 4 对。
 
 ### 反证（三轮，各挂 9 条红）
 | 破坏 | 现象 |
@@ -294,7 +312,13 @@ options.almanacProfile             ← App.jsx options（构造段 + 依赖数�
 | `drawIce` 档案消费全掐断 | 冬六档掉到 0.066% |
 | 水色通道退回恒定 | 春/秋组内 5 对档位全部 0.00% |
 
+### 桌面版验收（2026-10-03）
+`npm run desktop:local` 重启 → `diag-running.cjs` 9/9（标题/无异常/canvas 1725×1125/亮度 std 20.5/
+无边框 0×0/逐帧 4.27% 动画活着）→ `check:terms:desktop` **10/10**，回归 `npm test` 304/304。
+产物 `out/terms-desktop/`（8 档 × a/b）与 `out/terms-desktop-diff/`（自比 + 静止像素 ×12 差异图）。
+
 ### 下一步
 - **落叶通道**：`litterCount` 已在翻译层就绪，但 `atmosphere.js` 仍按 `season` 硬编码
+  ⇒ **实测大雪画面里仍有橙色落叶**（`season:summer` → 6 片）
 - **`frost` 通道**：翻译层有值，渲染层未消费
 - **昼夜连续化**（第 1 步，收益最大）

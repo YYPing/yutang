@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>节气与昼夜 · 高保真工程规格图</title>
+<style>
+  :root{
+    --bg:#0b1014; --panel:#141d24; --line:#26343d; --card:#101922;
+    --fg:#e9f1f4; --fg2:#8ba0a8; --fg3:#5f737c;
+    --teal:#1d9e75; --amber:#ba7517; --blue:#378add; --violet:#7f77dd; --red:#e24b4a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;padding:24px;line-height:1.65}
+  .wrap{max-width:1400px;margin:0 auto}
+  h1{font-size:20px;font-weight:500;margin-bottom:4px}
+  .sub{font-size:13px;color:var(--fg2);margin-bottom:8px}
+  h2{font-size:16px;font-weight:500;margin:32px 0 4px;padding-top:20px;border-top:0.5px solid var(--line)}
+  h2:first-of-type{border-top:none;padding-top:8px}
+  h3{font-size:13px;font-weight:500;margin:18px 0 8px;color:var(--fg)}
+  .tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:4px;background:#1a2730;color:var(--fg2);margin-left:8px;vertical-align:middle}
+  .tag.t{background:rgba(29,158,117,.16);color:#5fd6a8}
+  .tag.w{background:rgba(186,117,23,.16);color:#e0a24a}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;margin:10px 0}
+  th,td{text-align:left;padding:8px 10px;border-bottom:0.5px solid var(--line);vertical-align:top}
+  th{color:var(--fg2);font-weight:400;font-size:12px;white-space:nowrap}
+  td{font-variant-numeric:tabular-nums}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;background:#182430;padding:1.5px 6px;border-radius:3px;color:#a8d8e8}
+  .sw{display:inline-block;width:13px;height:13px;border-radius:3px;vertical-align:-2px;margin-right:5px;border:0.5px solid rgba(255,255,255,.18)}
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin:12px 0}
+  .panel{background:var(--panel);border:0.5px solid var(--line);border-radius:10px;padding:14px 16px}
+  .ref{display:block;width:100%;border-radius:8px;margin-bottom:12px;border:0.5px solid var(--line)}
+  .note{font-size:12px;color:var(--fg2);line-height:1.75;margin:10px 0;padding:10px 12px;background:#101a22;border-left:2px solid var(--teal);border-radius:0 6px 6px 0}
+  .note.warn{border-left-color:var(--amber)}
+  .note b{color:var(--fg);font-weight:500}
+  ol,ul{margin:8px 0 8px 20px;font-size:12.5px;color:var(--fg2)}
+  li{margin-bottom:5px}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:12.5px;margin:8px 0}
+  .kv dt{color:var(--fg2)}
+  .kv dd{font-variant-numeric:tabular-nums}
+  .flow{display:flex;align-items:stretch;gap:10px;flex-wrap:wrap;margin:12px 0}
+  .step{background:var(--card);border:0.5px solid var(--line);border-radius:8px;padding:10px 12px;flex:1;min-width:120px}
+  .step .n{font-size:11px;color:var(--fg3);margin-bottom:2px}
+  .step .v{font-size:13px;color:var(--fg)}
+  .arrow{align-self:center;color:var(--fg3);font-size:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>节气与昼夜 · 高保真工程规格图</h1>
+  <p class="sub">夏至正午 / 大雪冰封泉眼 · 开发照此实现即可 · 所有数值实测自参考图，非目测</p>
+
+  <div class="note">
+    <b>本文档的定位</b>：左边是<b>效果图</b>（视觉目标），下面是<b>精确参数</b>（实现依据）。
+    所有色值、坐标、半径都从效果图上<b>采样实测</b>得到，可直接搬进代码。
+  </div>
+
+  <h2>零、全局坐标系与规格<span class="tag t">已实测</span></h2>
+  <table>
+    <tr><th>项目</th><th>规格</th><th>说明</th></tr>
+    <tr><td>参考画布</td><td><span class="mono">1725 × 1125</span>（CSS 1380×900）</td><td>实测运行窗口；所有归一化坐标以此为基准</td></tr>
+    <tr><td>设计稿尺寸</td><td><span class="mono">1536 × 1024</span></td><td>AI 参考图尺寸，比例 1.5:1</td></tr>
+    <tr><td>坐标约定</td><td>归一化 <span class="mono">(u,v)</span>∈[0,1]</td><td>u 向右、v 向下；与 <code>landscape.js</code> 的 <code>uv</code> 一致</td></tr>
+    <tr><td>宽高比锁定</td><td><span class="mono">16/9</span></td><td>用<code>uCover</code> 做 cover 裁切，勿用 stretch</td></tr>
+  </table>
+
+  <h2>一、夏至正午<span class="tag t">A-夏至正午-高保真.png</span></h2>
+  <img class="ref" src="A-夏至正午-高保真.png" alt="夏至正午高保真参考图">
+  <p style="font-size:12px;color:var(--fg3)">↑ 视觉目标：网状焦散光网铺满池底、荷叶透出放射叶脉、水色黄绿→青蓝通透</p>
+
+  <h3>1.1 绘制顺序（自下而上，10 层）</h3>
+  <div class="flow">
+    <div class="step"><div class="n">L1</div><div class="v">深水底色</div></div><div class="arrow">→</div>
+    <div class="step"><div class="n">L2</div><div class="v">浅水黄绿</div></div><div class="arrow">→</div>
+    <div class="step"><div class="n">L3</div><div class="v">鹅卵石 + 苔藓</div></div><div class="arrow">→</div>
+    <div class="step"><div class="n">L4</div><div class="v">焦散光网</div></div><div class="arrow">→</div>
+    <div class="step"><div class="n">L5</div><div class="v">光柱</div></div><div class="arrow">→</div>
+    <div class="step"><div class="n">L6</div><div class="v">荷叶群</div></div><div class="arrow">→</div>
+    <div class="step"><div class="n">L7</div><div class="v">荷花</div></div><div class="arrow">→</div>
+    <div class="step"><div class="n">L8</div><div class="v">锦鲤</div></div><div class="arrow">→</div>
+    <div class="step"><div class="n">L9</div><div class="v">光影叠加</div></div><div class="arrow">→</div>
+    <div class="step"><div class="n">L10</div><div class="v">四角暗角</div></div>
+  </div>
+
+  <h3>1.2 水色（实测三段采样）</h3>
+  <table>
+    <tr><th>区域</th><th>采样点</th><th>实测 RGB</th><th>十六进制</th><th>实现口径</th></tr>
+    <tr><td>浅水偏黄绿</td><td><span class="mono">(0.15, 0.18)</span></td><td><span class="sw" style="background:rgb(146,187,99)"></span>146,187,99</td><td><code>#92BB63</code></td><td>靠近岸边 / 浅处</td></tr>
+    <tr><td>中心过渡</td><td><span class="mono">(0.50, 0.50)</span></td><td><span class="sw" style="background:rgb(158,215,175)"></span>158,215,175</td><td><code>#9ED7AF</code></td><td>黄绿向青蓝过渡</td></tr>
+    <tr><td>最暖高光</td><td><span class="mono">(0.70, 0.80)</span></td><td><span class="sw" style="background:rgb(172,211,26)"></span>172,211,26</td><td><code>#ACD31A</code></td><td>荷叶 / 焦散最亮处</td></tr>
+  </table>
+  <div class="note">
+    <b>实现</b>：用<b>径向渐变</b>模拟深度 —— 池心偏 <code>#9ED7AF</code>，向外过渡到 <code>#92BB63</code>，
+    最亮点靠焦散与荷叶叠加自然产生，不单独画。亮度实测 min<b>44</b> / max<b>251</b> / 均<b>164</b>。
+  </div>
+
+  <h3>1.3 焦散光网（核心，代码实现）</h3>
+  <table>
+    <tr><th>参数</th><th>值</th><th>对应常量</th><th>说明</th></tr>
+    <tr><td>亮线强度上限</td><td><span class="mono">0.16</span></td><td><code>CAUSTIC.ink</code></td><td>正午晴天满值</td></tr>
+    <tr><td>网格密度</td><td><span class="mono">2.6</span></td><td><code>CAUSTIC.scale</code></td><td>⚠️ 是<b>格子数</b>不是尺寸倍率</td></tr>
+    <tr><td>域扭曲</td><td><span class="mono">0.42</span></td><td><code>CAUSTIC.warp</code></td><td>让网格呈波光而非棋盘</td></tr>
+    <tr><td>漂移速度</td><td><span class="mono">(0.13, −0.09)</span></td><td>shader 内</td><td>两组不同频，避免整体平移感</td></tr>
+    <tr><td>亮线阈值</td><td><span class="mono">0.62</span></td><td><code>CAUSTIC.gate</code></td><td>实测占空比 <b>3.2%</b></td></tr>
+    <tr><td>浅水增益</td><td><span class="mono">0.55</span></td><td><code>CAUSTIC.shallowGain</code></td><td>离岸越近越密</td></tr>
+    <tr><td>亮线色</td><td><span class="mono">rgb(0.62, 0.86, 1.0)</span></td><td>shader 内</td><td><b>冷色不是白色</b>，用白色会洗白画面</td></tr>
+  </table>
+  <div class="note warn">
+    <b>⚠️ 三个必须避开的坑</b>
+    <ol>
+      <li><b>用<code>fract((q+drift)*cells)</code> 而不是 <code>uv*scale</code></b>——后者只改格子大小不改密度，实测 scale 3→20 占空比恒为 19%，看起来是一片灰雾。</li>
+      <li><b>只加光不减光</b>：<code>color += tint*amount</code>，绝不<code>color -=</code>。</li>
+      <li><b>必须乘水域掩码</b>：<code>water = smoothstep(.015,.08, min(g,b)-r)</code>，否则光网会画到岸上。</li>
+    </ol>
+  </div>
+
+  <h3>1.4 荷叶与荷花</h3>
+  <table>
+    <tr><th>元素</th><th>数量</th><th>尺寸</th><th>形态参数</th></tr>
+    <tr><td>荷叶</td><td>18–24 片</td><td>半径 <span class="mono">0.035–0.075</span></td><td>圆盘 + <b>放射状叶脉</b>（8–12 条，从中心到边缘）</td></tr>
+    <tr><td>叶色渐变</td><td>—</td><td>中心 → 边缘</td><td>亮黄绿 → 中绿，边缘加深<span class="tag w">实测</span></td></tr>
+    <tr><td>荷花</td><td>3–5 朵</td><td>半径 <span class="mono">0.020–0.030</span></td><td>三层花瓣：外层大而淡、内层紧而深</td></tr>
+    <tr><td>花色</td><td>—</td><td>—</td><td>粉红，中心偏白</td></tr>
+  </table>
+
+  <h3>1.5 锦鲤</h3>
+  <table>
+    <tr><th>部位</th><th>几何</th><th>色值</th></tr>
+    <tr><td>身体</td><td>椭圆，长:宽 = <span class="mono">2.4:1</span></td><td>橙红 <code>#E8562C</code></td></tr>
+    <tr><td>白斑</td><td>偏心椭圆（中心 <span class="mono">−0.18L</span>）</td><td>乳白 <code>#FAFAF8</code></td></tr>
+    <tr><td>尾鳍</td><td>三角，长 <span class="mono">0.45L</span></td><td>橙红半透</td></tr>
+    <tr><td>体长</td><td colspan2"><span class="mono">0.016–0.020</span> × 画布宽（约 27–34px）</td></tr>
+  </table>
+
+  <h2>二、大雪冰封 + 活水泉眼<span class="tag t">B-大雪冰封泉眼-高保真.png</span></h2>
+  <img class="ref" src="B-大雪冰封泉眼-高保真.png" alt="大雪冰封与活水泉眼高保真参考图">
+  <p style="font-size:12px;color:var(--fg3)">↑ 视觉目标：全池冰封、圆形活水泉眼冒气泡蒸汽、锦鲤环绕聚集</p>
+
+  <h3>2.1 泉眼定位（实测）</h3>
+  <table>
+    <tr><th>项目</th><th>实测值</th><th>规划值</th><th>结论</th></tr>
+    <tr><td>中心坐标</td><td><span class="mono">(0.69, 0.61)</span></td><td><span class="mono">(0.68, 0.62)</span></td><td>✔ 吻合，误差 &lt;0.01</td></tr>
+    <tr><td>泉眼水色</td><td><span class="sw" style="background:rgb(67,128,118)"></span>67,128,118</td><td><code>#438076</code></td><td>比冰面暖、饱和度高</td></tr>
+    <tr><td>孔洞半径</td><td><span class="mono">0.062</span> × 画布宽</td><td><span class="mono">≈0.062</span></td><td>直径约池宽 12.4%</td></tr>
+    <tr><td>出现时机</td><td colspan3">霜降后；其他季节隐去（季节性元素）</td></tr>
+  </table>
+
+  <h3>2.2 冰层绘制（4 步）</h3>
+  <div class="flow">
+    <div class="step"><div class="n">STEP 1</div><div class="v">铺满冰层<br><code>rgba(206,226,238,.80)</code></div></div><div class="arrow">→</div>
+    <div class="step"><div class="n">STEP 2</div><div class="v">深浅不均<br>26 个径向斑</div></div><div class="arrow">→</div>
+    <div class="step"><div class="n">STEP 3</div><div class="v">冰裂纹<br>16 条辐射</div></div><div class="arrow">→</div>
+    <div class="step"><div class="n">STEP 4</div><div class="v">挖泉眼孔<br><code>destination-out</code></div></div>
+  </div>
+  <table>
+    <tr><th>参数</th><th>值</th><th>说明</th></tr>
+    <tr><td>冰层基色</td><td><span class="mono">rgba(206,226,238,0.80)</span></td><td>淡青灰 + 乳白</td></tr>
+    <tr><td>深浅斑</td><td>26 个，r = <span class="mono">90–350</span></td><td>alpha <span class="mono">.05–.17</span> 白</td></tr>
+    <tr><td>冰裂纹</td><td>16 条，从泉眼辐射</td><td><code>rgba(255,255,255,.42)</code>，线宽 1.1，长度 <span class="mono">2.6R–0.36W</span></td></tr>
+    <tr><td>雪覆斑</td><td>18 个不规则白斑</td><td><code>rgba(248,252,255,.72)</code></td></tr>
+    <tr><td>孔洞融边</td><td>环宽 3</td><td><code>rgba(190,215,228,.55)</code></td></tr>
+  </table>
+  <div class="note">
+    <b>关键技巧</b>：冰层整体用 <code>destination-out</code> 模式挖圆孔。
+    这样孔内直接透出下层暖色水色，不用重画一遍水。孔边缘再补一圈半透明环，做「融边」效果。
+  </div>
+
+  <h3>2.3 泉眼动态（4 元素，全部在动）</h3>
+  <table>
+    <tr><th>元素</th><th>周期</th><th>参数</th></tr>
+    <tr><td>水波纹</td><td>~5.2s</td><td>3 圈，<code>rgba(200,240,240,.34)</code>，半径随 <code>sin(ts*1.2+k)</code> 呼吸</td></tr>
+    <tr><td>气泡</td><td>~3.6s/个</td><td>9 个；半径 <code>1.4 + ph*2.2</code>，alpha <code>.55*(1−ph)</code> 渐隐</td></tr>
+    <tr><td>蒸汽</td><td>~35s</td><td>alpha <code>.16 + .20*|sin(ts*.18)|</code>，晨昏更明显</td></tr>
+    <tr><td>锦鲤聚集</td><td>持续</td><td>9 尾，环绕半径 <code>1.5R–3.4R</code>，黄金角 <code>i*2.399</code> 分布</td></tr>
+  </table>
+
+  <h3>2.4 冬景色彩规格</h3>
+  <table>
+    <tr><th>区域</th><th>采样点</th><th>实测 RGB</th><th>十六进制</th></tr>
+    <tr><td>冰面浅区</td><td><span class="mono">(0.15, 0.18)</span></td><td><span class="sw" style="background:rgb(140,163,150)"></span>140,163,150</td><td><code>#8CA396</code></td></tr>
+    <tr><td>冰面中心</td><td><span class="mono">(0.50, 0.50)</span></td><td><span class="sw" style="background:rgb(136,169,172)"></span>136,169,172</td><td><code>#88A9AC</code></td></tr>
+    <tr><td>积雪高光</td><td><span class="mono">(0.82, 0.80)</span></td><td><span class="sw" style="background:rgb(190,192,181)"></span>190,192,181</td><td><code>#BEC0B5</code></td></tr>
+    <tr><td>泉眼活水</td><td><span class="mono">(0.69, 0.61)</span></td><td><span class="sw" style="background:rgb(67,128,118)"></span>67,128,118</td><td><code>#438076</code></td></tr>
+  </table>
+  <p style="font-size:12.5px;color:var(--fg2)">亮度实测 min <b>47</b> / max <b>233</b> / 均 <b>155</b>。焦散降至<b>6%</b>（<code>.16 ×weather.snowy .1 × season.winter .3 ≈ .005</code>），冬季画面靠泉眼与冰裂纹承担视觉。</p>
+
+  <h2>三、昼夜参数表（光影通道）</h2>
+  <table>
+    <tr><th>时段</th><th>环境光</th><th>焦散</th><th>色温 RGB</th><th>色温名</th><th>光柱</th></tr>
+    <tr><td>深夜 00:00</td><td><span class="mono">0.590</span></td><td>6%</td><td><code>.62,.72,1.00</code></td><td>冷蓝</td><td>无</td></tr>
+    <tr><td>黎明 05:30</td><td><span class="mono">0.630</span></td><td>30%</td><td><code>1.00,.84,.68</code></td><td>暖橙</td><td>斜射·最淡</td></tr>
+    <tr><td>清晨 07:00</td><td><span class="mono">0.660</span></td><td>75%</td><td><code>1.00,.94,.84</code></td><td>暖白</td><td>斜射</td></tr>
+    <tr><td>正午 12:00</td><td><span class="mono">0.670</span></td><td><b>100%</b></td><td><code>1.00,.98,.94</code></td><td>中性白</td><td>近垂直·最强</td></tr>
+    <tr><td>黄昏 17:30</td><td><span class="mono">0.620</span></td><td>25%</td><td><code>1.00,.78,.58</code></td><td>暖金</td><td><b>最长最斜</b></td></tr>
+    <tr><td>入夜 21:00</td><td><span class="mono">0.600</span></td><td>10%</td><td><code>.78,.82,.98</code></td><td>冷蓝</td><td>无</td></tr>
+  </table>
+  <div class="note">
+    <b>环境光口径</b> = <code>LIGHT.waterBase .31</code> + <code>ambientDay .36</code>（昼）/ <code>ambientNight .28</code>（夜）。
+    夜不是纯黑—— 保留 <b>.590</b> 底光，靠<b>色温偏移</b>表达夜，不是压暗。这是需求 §10.5 的硬值。
+  </div>
+
+  <h2>四、四季物候开关表（防跨季串味）</h2>
+  <table>
+    <tr><th>节气段</th><th>荷花</th><th>荷叶</th><th>冰 / 雪</th><th>泉眼</th><th>苔藓</th></tr>
+    <tr><td>立春 · 雨水 · 惊蛰</td><td>✘</td><td>✘</td><td>残雪 / 薄冰</td><td>✘</td><td>新绿</td></tr>
+    <tr><td>春分 · 清明 · 谷雨</td><td>花苞</td><td>小叶</td><td>✘</td><td>✘</td><td>丰茂</td></tr>
+    <tr><td>立夏 · 小满 · 芒种</td><td>盛开</td><td>大叶</td><td>✘</td><td>✘</td><td>丰茂</td></tr>
+    <tr><td>夏至 · 小暑 · 大暑</td><td><b>盛开</b></td><td><b>满池</b></td><td>✘</td><td>✘</td><td>丰茂</td></tr>
+    <tr><td>立秋 · 处暑 · 白露</td><td>残苞</td><td>枯卷</td><td>✘</td><td>✘</td><td>转黄</td></tr>
+    <tr><td>秋分 · 寒露 · 霜降</td><td>✘</td><td>枯卷</td><td>初霜</td><td>◐始现</td><td>转黄</td></tr>
+    <tr><td>立冬 · 小雪 · 大雪</td><td>✘</td><td>全枯</td><td><b>冰封</b></td><td><b>✔</b></td><td>覆霜</td></tr>
+    <tr><td>冬至 · 小寒 · 大寒</td><td>✘</td><td>全枯</td><td><b>冰封</b></td><td><b>✔</b></td><td>覆霜</td></tr>
+  </table>
+  <div class="note warn">
+    <b>⚠️ 冬季节气必须显式禁止花</b>。图生图/程序化都容易把花带进冬天，
+    prompt 要写「<b>不要荷花、不要粉色花、不要花苞</b>」——
+    光描述「要什么」不够，排除项必须显式否定。
+  </div>
+
+  <h2>五、验收判据（实现后必查）</h2>
+  <table>
+    <tr><th>检查项</th><th>判据</th><th>工具</th></tr>
+    <tr><td>焦散占空比</td><td>2% – 16%</td><td><code>npm run check:caustic</code></td></tr>
+    <tr><td>cells 是真控制</td><td>亮线游程随 cells 变化 &gt;1.5×</td><td>同上</td></tr>
+    <tr><td>光照场</td><td>暗 .67 / 池心 1.22 / 差 1.431</td><td><code>npm run check:light</code></td></tr>
+    <tr><td>投喂感应圈</td><td>短边 × .30，35 项</td><td><code>npm run check:feedcircle</code></td></tr>
+    <tr><td>水面环正圆</td><td>r(θ) 径向极值比 = 1.000，18 项</td><td><code>npm run check:rings</code></td></tr>
+    <tr><td>单元测试</td><td>289 项</td><td><code>npm test</code></td></tr>
+    <tr><td>实机画面</td><td>均亮度 &gt; 10 · 标准差 &gt; 6 · 9/9</td><td><code>npm run check:desktop</code></td></tr>
+  </table>
+  <div class="note warn">
+    <b>昼夜改连续插值后，<code>check:light</code> 的六个数会变</b> —— 这是预期内的
+    （需求里那些数是按某时刻采的）。<b>必须重标定并留档</b>，不能让灯红当成回归。
+  </div>
+
+  <h2>六、交互式效果图</h2>
+  <ul>
+    <li><code>docs/solar-terms/节气一天-夏至.html</code> —— 24h 连续光影演化，可拖时间轴</li>
+    <li><code>docs/solar-terms/节气一天-大雪冰封.html</code> —— 冰封与泉眼动态，含「只看泉眼」聚焦</li>
+    <li><code>npm run check:caustic</code> —— 焦散纯 JS 探针（不开窗口）</li>
+  </ul>
+</div>
+</body>
+</html>

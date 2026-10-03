@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>夏至 · 节气一天光影演化</title>
+<style>
+  :root{
+    --bg:#0d1418; --panel:#151f24; --line:#26343b;
+    --fg:#e8f0f2; --fg2:#8fa3aa;
+    --amber:#ba7517; --teal:#1d9e75; --blue:#378add; --violet:#7f77dd;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    padding:24px; line-height:1.6;
+  }
+  .wrap{max-width:1280px;margin:0 auto}
+  h1{font-size:19px;font-weight:500;margin-bottom:4px}
+  .sub{font-size:13px;color:var(--fg2);margin-bottom:20px}
+  .stage{
+    background:var(--panel); border:0.5px solid var(--line);
+    border-radius:12px; padding:14px; margin-bottom:16px;
+  }
+  canvas{width:100%;height:auto;display:block;border-radius:8px;background:#0a1a22}
+  .hud{
+    display:flex;align-items:baseline;justify-content:space-between;
+    gap:16px;margin-bottom:14px;flex-wrap:wrap;
+  }
+  #now{font-size:14px;font-weight:500}
+  #readout{font-size:13px;color:var(--fg2);font-variant-numeric:tabular-nums}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:8px;margin-bottom:16px}
+  .card{background:var(--panel);border:0.5px solid var(--line);border-radius:8px;padding:10px 12px}
+  .card .k{font-size:12px;color:var(--fg2)}
+  .card .v{font-size:19px;font-weight:500;font-variant-numeric:tabular-nums;margin-top:2px}
+  .ctrls{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+  input[type=range]{flex:1;min-width:240px;accent-color:var(--teal);height:4px}
+  button{
+    background:transparent;color:var(--fg);border:0.5px solid var(--line);
+    border-radius:6px;padding:6px 12px;font-size:13px;cursor:pointer;
+    font-family:inherit;
+  }
+  button:hover{border-color:var(--teal);color:#fff}
+  button.on{border-color:var(--teal);color:var(--teal)}
+  .btnrow{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:0.5px solid var(--line)}
+  th{color:var(--fg2);font-weight:400}
+  td{font-variant-numeric:tabular-nums}
+  tr.now td{color:var(--teal)}
+  .note{font-size:12px;color:var(--fg2);margin-top:16px;line-height:1.7}
+  code{background:var(--panel);padding:1px 5px;border-radius:3px;font-size:11px}
+  .bar{height:3px;background:var(--line);border-radius:2px;margin-top:6px;overflow:hidden}
+  .bar i{display:block;height:100%;border-radius:2px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>夏至 · 节气一天</h1>
+  <p class="sub">0:00 – 24:00 连续光影演化 · 色温 / 环境光 / 焦散 / 光柱角度 / 鱼群活跃度 五项同步</p>
+
+  <div class="stage">
+    <div class="hud">
+      <div id="now">正午 12:00</div>
+      <div id="readout">环境光 0.670 · 焦散 100%</div>
+    </div>
+    <canvas id="pond" width="1280" height="600" role="img"
+      aria-label="夏至一天水面光影演化：深夜冷蓝无光，正午光网最密，黄昏暖金，入夜转冷。"></canvas>
+  </div>
+
+  <div class="cards">
+    <div class="card"><div class="k">时段</div><div class="v" id="c-seg">正午</div></div>
+    <div class="card"><div class="k">环境光</div><div class="v" id="c-amb">0.670</div>
+      <div class="bar"><i id="b-amb" style="background:var(--amber);width:100%"></i></div></div>
+    <div class="card"><div class="k">焦散</div><div class="v" id="c-cau">100%</div>
+      <div class="bar"><i id="b-cau" style="background:var(--teal);width:100%"></i></div></div>
+    <div class="card"><div class="k">色温</div><div class="v" id="c-tint">中性白</div></div>
+    <div class="card"><div class="k">鱼群活跃</div><div class="v" id="c-fish">65%</div>
+      <div class="bar"><i id="b-fish" style="background:var(--violet);width:65%"></i></div></div>
+    <div class="card"><div class="k">光柱倾角</div><div class="v" id="c-shaft">0°</div></div>
+  </div>
+
+  <div class="ctrls">
+    <span style="font-size:12px;color:var(--fg2)">0:00</span>
+    <input type="range" id="time" min="0" max="1440" value="720" step="2" aria-label="一天时间轴">
+    <span style="font-size:12px;color:var(--fg2)">24:00</span>
+  </div>
+  <div class="btnrow">
+    <button id="play" class="on">暂停</button>
+    <button data-h="330">黎明 5:30</button>
+    <button data-h="540">上午 9:00</button>
+    <button data-h="720">正午 12:00</button>
+    <button data-h="1050">黄昏 17:30</button>
+    <button data-h="1290">入夜 21:30</button>
+    <button data-h="60">深夜 01:00</button>
+  </div>
+
+  <table id="tbl">
+    <thead><tr><th>时段</th><th>时刻</th><th>环境光</th><th>焦散</th><th>色温</th><th>鱼群</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <p class="note">
+    <b>数据口径</b>：环境光与色温锚点取自 <code>src/engine/light-field.js</code> 真值——
+    水底 <code>waterBase .31</code> + 昼 <code>ambientDay .36</code> / 夜 <code>ambientNight .28</code>
+    ⇒ 昼 <b>.670</b> / 夜 <b>.590</b>；焦散上限取 <code>CAUSTIC.ink = .16</code>，门控参考
+    <code>CAUSTIC.weather.sunny = 1</code>。<br>
+    <b>设计假设（非真值）</b>：鱼群活跃度按「正午回落、晨昏高峰」设定；黎明 .32 / 黄昏 .31 的中间值同样是
+    为曲线平滑而设，需你确认是否符合预期后再写进实现。
+  </p>
+</div>
+
+<script>
+const cv=document.getElementById('pond'), ctx=cv.getContext('2d');
+const W=cv.width, H=cv.height;
+const WATER=0.31, AMB_DAY=0.36, AMB_NIGHT=0.28;
+
+const SEGS=[
+ {n:'深夜',h:0,   amb:AMB_NIGHT,tint:[.62,.72,1.00],cau:.06,fish:.25},
+ {n:'凌晨',h:4,   amb:AMB_NIGHT,tint:[.66,.75,1.00],cau:.10,fish:.40},
+ {n:'黎明',h:5.5, amb:.32,       tint:[1.00,.84,.68],cau:.30,fish:.95},
+ {n:'清晨',h:7,   amb:.35,       tint:[1.00,.94,.84],cau:.75,fish:.80},
+ {n:'上午',h:9,   amb:.36,       tint:[1.00,.97,.92],cau:.95,fish:.72},
+ {n:'正午',h:12,  amb:.36,       tint:[1.00,.98,.94],cau:1.0,fish:.65},
+ {n:'午后',h:15,  amb:.36,       tint:[1.00,.96,.88],cau:.88,fish:.68},
+ {n:'黄昏',h:17.5,amb:.31,       tint:[1.00,.78,.58],cau:.25,fish:.90},
+ {n:'入夜',h:19,  amb:.29,       tint:[.78,.82,.98],cau:.10,fish:.50},
+ {n:'夜深',h:21.5,amb:AMB_NIGHT,tint:[.62,.72,1.00],cau:.06,fish:.28},
+ {n:'子夜',h:24,  amb:AMB_NIGHT,tint:[.62,.72,1.00],cau:.06,fish:.25},
+];
+const TINTNAME=(t)=>{const w=t[0]-t[2];return w>0.12?'暖金':(t[2]>t[0]?'冷蓝':'中性白');};
+
+function sample(h){
+  let a=SEGS[0], b=SEGS[SEGS.length-1];
+  for(let i=0;i<SEGS.length-1;i++){
+    if(h>=SEGS[i].h && h<=SEGS[i+1].h){ a=SEGS[i]; b=SEGS[i+1]; break; }
+  }
+  const t=b.h===a.h?0:(h-a.h)/(b.h-a.h);
+  const L=(x,y)=>x+(y-x)*t;
+  return {
+    n: t<.5?a.n:b.n,
+    amb:L(a.amb,b.amb),
+    tint:a.tint.map((v,i)=>L(v,b.tint[i])),
+    cau:L(a.cau,b.cau),
+    fish:L(a.fish,b.fish),
+  };
+}
+
+const FISH=[[.28,.30,.020],[.62,.26,.016],[.44,.58,.013],[.72,.64,.011],[.20,.68,.014],[.52,.76,.012],[.36,.44,.011],[.66,.80,.010]];
+function drawFish(fx,fy,fw,rot){
+  const x=fx*W, y=fy*H, w=fw*W;
+  ctx.save(); ctx.translate(x,y); ctx.rotate(rot);
+  ctx.fillStyle='rgba(232,86,44,.92)';
+  ctx.beginPath(); ctx.ellipse(0,0,w,w*.42,0,0,6.2832); ctx.fill();
+  ctx.fillStyle='rgba(250,250,248,.95)';
+  ctx.beginPath(); ctx.ellipse(-w*.18,0,w*.50,w*.30,0,0,6.2832); ctx.fill();
+  ctx.fillStyle='rgba(232,86,44,.70)';
+  ctx.beginPath(); ctx.moveTo(-w*.50,0); ctx.lineTo(-w*.95,-w*.22); ctx.lineTo(-w*.95,w*.22);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+function draw(h, sec){
+  const s=sample(h), t=s.tint;
+  const base=[0,1,2].map(i=>Math.min(1,(WATER+s.amb)*t[i]));
+
+  // 水色：浅区黄绿 -> 深区青蓝
+  const g=ctx.createLinearGradient(0,0,W,H);
+  const rgb=(v)=>Math.round(Math.min(1,v)*255);
+  g.addColorStop(0,   `rgb(${base.map((v,i)=>rgb(v*(i===0?1.12:1.06))).join(',')})`);
+  g.addColorStop(.45, `rgb(${base.map(rgb).join(',')})`);
+  g.addColorStop(1,   `rgb(${base.map((v)=>rgb(v*.80)).join(',')})`);
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+  // 焦散网（只加光）
+  if(s.cau>0.02){
+    ctx.save(); ctx.globalCompositeOperation='lighter';
+    const step=44, amp=4+s.cau*13, ph=sec*0.50;
+    ctx.lineWidth=.5+s.cau*1.5;
+    ctx.strokeStyle=`rgba(158,220,255,${.50*s.cau})`;
+    for(let y=-step;y<H+step;y+=step){
+      ctx.beginPath();
+      for(let x=0;x<=W;x+=14){
+        const yy=y+Math.sin((x/W)*6.3+ph)*amp+Math.sin((x/W)*13.1-ph*.7)*amp*.4;
+        x===0?ctx.moveTo(x,yy):ctx.lineTo(x,yy);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // 光柱：正午接近垂直，黄昏最长最斜
+  const sh=Math.max(0,Math.sin((h-6)/12*Math.PI));
+  if(sh>0.02){
+    ctx.save(); ctx.globalCompositeOperation='lighter';
+    const ang=(h-12)/6*0.5;
+    for(let i=0;i<3;i++){
+      ctx.save();
+      ctx.translate(W*(0.28+i*0.22),0); ctx.rotate(ang);
+      const gr=ctx.createLinearGradient(0,0,0,H);
+      gr.addColorStop(0,`rgba(255,246,214,${.22*sh})`);
+      gr.addColorStop(1,'rgba(255,246,214,0)');
+      ctx.fillStyle=gr; ctx.fillRect(-32,0,64,H);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  // 锦鲤：数量随活跃度
+  const k=Math.max(2,Math.round(FISH.length*s.fish));
+  for(let i=0;i<k;i++){
+    const[fx,fy,fw]=FISH[i];
+    const rot=Math.sin(sec*0.55+i*1.7)*0.20;
+    drawFish(fx+Math.sin(sec*0.18+i)*0.012, fy+Math.cos(sec*0.15+i)*0.010, fw, rot);
+  }
+
+  // 四角暗角
+  const v=ctx.createRadialGradient(W/2,H/2,H*.30,W/2,H/2,H*.95);
+  v.addColorStop(0,'rgba(0,0,0,0)'); v.addColorStop(1,'rgba(4,22,30,.55)');
+  ctx.fillStyle=v; ctx.fillRect(0,0,W,H);
+
+  // 夜色：加冷蓝罩（表达夜靠色温偏移而非压暗，保住 .28 底光）
+  const night=Math.max(0,(.36-s.amb)/.08);
+  if(night>0){ ctx.fillStyle=`rgba(18,32,74,${.34*night})`; ctx.fillRect(0,0,W,H); }
+
+  // HUD
+  const hh=String(Math.floor(h)).padStart(2,'0');
+  const mm=String(Math.round((h%1)*60)).padStart(2,'0');
+  const amb=WATER+s.amb;
+  document.getElementById('now').textContent=`${s.n} ${hh}:${mm}`;
+  document.getElementById('readout').textContent=`环境光 ${amb.toFixed(3)} · 焦散 ${Math.round(s.cau*100)}%`;
+  document.getElementById('c-seg').textContent=s.n;
+  document.getElementById('c-amb').textContent=amb.toFixed(3);
+  document.getElementById('c-cau').textContent=Math.round(s.cau*100)+'%';
+  document.getElementById('c-tint').textContent=TINTNAME(t);
+  document.getElementById('c-fish').textContent=Math.round(s.fish*100)+'%';
+  document.getElementById('c-shaft').textContent=Math.abs((h-12)/6*0.5*57.3).toFixed(0)+'°';
+  document.getElementById('b-amb').style.width=((amb-.28)/.08*100).toFixed(0)+'%';
+  document.getElementById('b-cau').style.width=(s.cau*100).toFixed(0)+'%';
+  document.getElementById('b-fish').style.width=(s.fish*100).toFixed(0)+'%';
+  markRow(s.n);
+}
+
+const tbody=document.querySelector('#tbl tbody');
+SEGS.filter((s,i)=>i<SEGS.length-1).forEach(s=>{
+  const tr=document.createElement('tr');
+  tr.dataset.n=s.n;
+  tr.innerHTML=`<td>${s.n}</td><td>${String(Math.floor(s.h)).padStart(2,'0')}:00</td>`+
+    `<td>${(WATER+s.amb).toFixed(3)}</td><td>${Math.round(s.cau*100)}%</td>`+
+    `<td>${TINTNAME(s.tint)}</td><td>${Math.round(s.fish*100)}%</td>`;
+  tbody.appendChild(tr);
+});
+function markRow(name){
+  tbody.querySelectorAll('tr').forEach(tr=>tr.classList.toggle('now',tr.dataset.n===name));
+}
+
+const sl=document.getElementById('time');
+let playing=true, timer=null;
+function tick(){
+  let v=+sl.value;
+  v=(v+1)%1441;
+  sl.value=v;
+  draw(v/60, performance.now()/1000);
+}
+function setPlay(on){
+  playing=on;
+  const b=document.getElementById('play');
+  b.textContent=on?'暂停':'播放一天';
+  b.classList.toggle('on',on);
+  if(on){ if(!timer) timer=setInterval(tick,26); }
+  else { clearInterval(timer); timer=null; }
+}
+document.getElementById('play').addEventListener('click',()=>setPlay(!playing));
+sl.addEventListener('input',()=>{ setPlay(false); draw(+sl.value/60, performance.now()/1000); });
+document.querySelectorAll('button[data-h]').forEach(b=>b.addEventListener('click',()=>{
+  setPlay(false); sl.value=b.dataset.h; draw(+b.dataset.h/60, performance.now()/1000);
+}));
+draw(12,0);
+setPlay(true);
+</script>
+</body>
+</html>

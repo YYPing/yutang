@@ -61,7 +61,8 @@
     "check:rings": "node tools/check-water-rings.js",
     "check:caustic": "node tools/probe-caustic.mjs",
     "check:almanac": "node tools/check-almanac-ui.cjs",
-    "check:terms": "node tools/probe-terms.mjs"
+    "check:terms": "node tools/probe-terms.mjs",
+    "check:terms:desktop": "node tools/verify-terms-desktop.cjs"
   },
   "dependencies": {
     "react": "^19.1.0",
