@@ -141,7 +141,10 @@ export function feed(world, opts = {}) {
   const circleFraction = opts.circleFraction ?? 0.18;
   const n = Math.max(1, Math.min(candidates.length, Math.round(candidates.length * circleFraction) + 1));
 
-  // 按 appetite 加权挑参与者（appetite 高的更容易挤到）
+  // 圈内鱼挑选：⚠️ 这里是**等概率随机**取，不是「按 appetite 加权」。
+  //    旧注释写"按 appetite 加权挑参与者"与实现不符（无 weighted pick），
+  //    已按事实更正。appetite 的真实作用在 feeding.js 的 wantsFood()
+  //    （有效抢食上限随 appetite 上下浮动 ⇒ 贪吃的更早参与）。
   const pool = candidates.slice();
   const picked = [];
   for (let i = 0; i < n && pool.length; i++) {
@@ -437,6 +440,11 @@ export function stats(world) {
     deathsByCause: { ...world.stats.deathsByCause },
     longestLivedDays: +world.stats.longestLivedDays.toFixed(1),
     largestCm: +world.stats.largestCm.toFixed(2),
+    // ★ 缺口 #11 连带修复：simulation.js getStats() 读 `snapshot.largestId` 来
+    //   渲染「最大一尾」，但 stats() 从来没返回过它 ⇒ 恒为 undefined ⇒
+    //   那一栏永远不显示（典型的"静默失败"：不报错、只是少一栏）。
+    //   world.stats.largestId 在 world.js:227 维护、:403 复位，这里透出。
+    largestId: world.stats.largestId ?? null,
     pondDays: +world.pondDays.toFixed(1),
     realDays: +world.realDays.toFixed(2),
   };

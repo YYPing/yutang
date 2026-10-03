@@ -85,9 +85,32 @@ export function eatPellet(fish) {
   };
 }
 
-/** F-7.3.4 是否参与抢食：感应圈内、饱食 <85 */
+/**
+ * F-7.3.4 是否参与抢食：感应圈内、饱食 < 有效上限。
+ * §8.3 缺口 #10：纳入 APPETITE 基因 —— 抢食意愿不再千鱼一面。
+ *
+ * 有效抢食上限 = 85 × (1 + 0.10 × (appetite - 1))，钳制到 [0, 100]
+ *   appetite = 1.2（贪吃）⇒ 有效上限 86.7 ⇒ 饱和到 86 才肯停抢 ⇒ 抢得更多更久
+ *   appetite = 1.0（中性）⇒ 有效上限 85.0 ⇒ 与改动前完全一致
+ *   appetite = 0.8（挑食）⇒ 有效上限 83.3 ⇒ 稍饱就不下场 ⇒ 吃得少
+ * 判定是 `satiety < 上限`，所以**上限越高 = 越晚退出抢食 = 越贪**，方向与语义一致。
+ *
+ * ⚠️ 曾经的 bug：最初写成 `(1 - delta)`，导致贪吃的上限反而更低（83.3），
+ *   语义变成"贪吃的一吃饱就停抢"——与基因含义相反。已改正为 `(1 + delta)`。
+ *   判据见 tools/check-eco-detail.mjs 的分界断言。
+ *
+ * ⚠️ 没有 genes 的鱼（手绘鱼、旧存档）走 appetiteNeutral=1.0 ⇒ 有效上限
+ * 恰好 85，与改动前**逐位一致**，不破坏既有行为。
+ */
+export function forageSatietyCeilingFor(fish) {
+  const appetite = fish?.genes?.appetite;
+  if (!Number.isFinite(appetite)) return FEEDING.forageSatietyCeiling;
+  const delta = (appetite - FEEDING.appetiteNeutral) * FEEDING.appetiteWeight;
+  return clamp(FEEDING.forageSatietyCeiling * (1 + delta), 0, 100);
+}
+
 export function wantsFood(fish) {
-  return fish.satiety < FEEDING.forageSatietyCeiling;
+  return fish.satiety < forageSatietyCeilingFor(fish);
 }
 
 /**

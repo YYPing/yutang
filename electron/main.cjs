@@ -18,10 +18,30 @@ let quitting = false;
 let globalGeneration = 0;
 let lastCursor = '';
 let nativeError = '';
+// ★ 开发态（未打包）也允许「登录时启动」：用 Electron 运行时的 execPath + 应用目录
+//   作为登录项（Windows 写注册表 Run 项、macOS 写 LaunchAgent）。
+//   打包态用 app.getPath('exe')（用户装的那个 App）。两者都指回同一个 main.cjs。
+const LAUNCH_AT_LOGIN_OK = ['darwin', 'win32'].includes(process.platform);
+function launchItemSettings(enabled) {
+  // openAsHidden 只对打包态有意义（用户装好的 App 有 --hidden 协议/参数处理）；
+  // 开发态是裸 electron.exe，带 openAsHidden 会导致开机后窗口直接隐藏、
+  // 没有 main.cjs 分支去还原 ⇒ 反而"开机找不到应用"。故开发态不带。
+  if (app.isPackaged) return { openAtLogin: enabled, openAsHidden: false };
+  // ★ 开发态：注册 electron.exe <项目根目录> + 与手动启动**同一组**运行参数。
+  //   少了 --no-sandbox / --disable-gpu-sandbox / --no-proxy-server，
+  //   开机自启时窗口会全黑或 ERR_FAILED（这些坑见 launch-desktop.cjs 文件头）。
+  //   参数与 tools/launch-desktop.cjs、桌面快捷方式保持一致。
+  const appDir = app.getAppPath();
+  return {
+    openAtLogin: enabled,
+    path: process.execPath,
+    args: [appDir, '--no-sandbox', '--disable-gpu-sandbox', '--no-proxy-server'],
+  };
+}
 let state = {
   isDesktop: true, desktopMode: false, globalInteraction: false,
   globalInteractionStatus: 'disabled', launchAtLogin: false,
-  launchAtLoginSupported: app.isPackaged && ['darwin', 'win32'].includes(process.platform),
+  launchAtLoginSupported: LAUNCH_AT_LOGIN_OK,
   platform: process.platform, desktopSupported: false,
   shortcut: SHORTCUT, feedShortcut: FEED_SHORTCUT,
   shortcutAvailable: false, feedShortcutAvailable: false,
@@ -309,11 +329,11 @@ function setGlobalInteraction(enabled) {
 function setLaunchAtLogin(enabled) {
   requireBoolean(enabled);
   if (!state.launchAtLoginSupported) {
-    state.message = '登录时启动仅在已安装的 macOS／Windows 应用中可用。';
+    state.message = '登录时启动仅在 macOS／Windows 上可用。';
     return publish();
   }
   try {
-    app.setLoginItemSettings({ openAtLogin: enabled });
+    app.setLoginItemSettings(launchItemSettings(enabled));
     state.launchAtLogin = app.getLoginItemSettings().openAtLogin;
     state.message = state.launchAtLogin === enabled ? (enabled ? '已设为登录时启动。' : '已关闭登录时启动。') : '系统没有接受登录启动设置；可在系统设置 → 通用 → 登录项中手动管理。';
   } catch { state.message = '系统未能更新登录项；可在系统设置中手动管理。'; }

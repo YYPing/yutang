@@ -91,6 +91,23 @@ export const FEEDING = {
   lowSatietyThreshold: 25,         // F-7.3.9 <25 → 活力 50%、感知 ×1.5
   /** F-7.3.4 抢食：感应圈内、饱食 <85 才抢 */
   forageSatietyCeiling: 85,
+  /**
+   * §8.3 APPETITE 基因参与抢食（缺口 #10）。
+   * 原来 `wantsFood()` 只看 `satiety < 85`，`genes.appetite` 虽已生成/遗传却
+   * **0 处被读** ⇒ 每条鱼的抢食意愿完全一样，基因形同虚设。
+   *
+   * 口径：用 appetite 调制「有效抢食上限」——判定是 `satiety < 上限`，
+   * 所以**上限越高 = 越晚退出抢食 = 越贪**：
+   *   有效上限 = 85 × (1 + 0.10 × (appetite - 1))
+   * appetite 范围 [0.8, 1.2]（见 genes.js GENE_RANGES.appetite）× 0.10
+   * ⇒ 有效上限 [83.3, 86.7]：贪吃的能吃到更饱才停，挑食的稍饱就退。
+   * ★ 不去动 simulation.js 里的 feedingSpeed 特征常数 2.35（那是"含抢食
+   *   提速"的指纹，动它就要连带重验 check:feedcircle 35 项）——本条只改
+   *   "谁参与 / 何时退出"的判定，不改"参与后多快"。
+   */
+  appetiteWeight: 0.10,
+  /** 无 genes 字段时（手绘鱼/旧存档）按中性值 1.0 处理，不改变既有行为 */
+  appetiteNeutral: 1.0,
 };
 
 /* --- 肥满度与营养闭环（§7.5 / C31）-------------------------------------- */
