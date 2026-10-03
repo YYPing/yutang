@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { DEFAULT_CITY, fetchWeather, lookupApproximateCity, getSeason, getDayPhase, getSolarTerm } from '../lib/environment.js';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { DEFAULT_CITY, fetchWeather, lookupApproximateCity, getSeason, getDayPhase, getSolarTerm, solarLongitude } from '../lib/environment.js';
 import { readStore, writeStore, normalizeCity, normalizeWeather, readCachedWeather, weatherCacheKey, isWeatherFresh } from '../lib/storage.js';
+import { ALMANAC_MODES, almanacFromLongitude, blendTerm, cycleBlend, cycleOffset, resolveAlmanac, termSeason } from '../engine/almanac.js';
 
 /** 网络定位结果的保鲜期。到期后允许后台静默重新定位 —— 换了网络（家 / 公司 / 手机热点）
  *  能自己纠正过来，不用用户手动点。
@@ -215,6 +216,57 @@ export function useEnvironment(settings) {
     };
   }, []);
 
+  // 「演示轮转」需要一条独立的亚秒级节拍 —— 上面那条 30 秒的时钟只管 weather 缓存过期，
+  // 而轮转要在 3 秒内走完「稳→渐变→换档」，靠 30 秒的 tick 根本推不动。
+  // ⚠️ 只在 cycle 模式挂这条 effect：follow/manual 下直接返回，不给所有用户白挂 interval。
+  const almanacMode = ALMANAC_MODES.includes(settings.almanacMode) ? settings.almanacMode : 'follow';
+  const [cycleNow, setCycleNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (almanacMode !== 'cycle') return undefined;
+    const timer = setInterval(() => setCycleNow(Date.now()), 600);
+    return () => clearInterval(timer);
+  }, [almanacMode]);
+
+  /**
+   * 时令解析：算出「当前显示哪个节气」+ 「它正往下一个节气过渡多少」。
+   *
+   * ★ 为什么 `follow` 走黄经而不是直接用 `getSolarTerm()`：
+   *   `getSolarTerm()` 每 15° 跳一档，视觉上就是每半个月"啪"地变一次。
+   *   黄经是连续的，于是 `t = (黄经 - 档位起点) / 15°` 就是天然的过渡进度。
+   *   `solarLongitude()` 在 1900–2100 之外返回 null —— 那时退回旧的 `getSolarTerm()`
+   *   （空串），保持"显示不出节气"，而不是硬造一个。
+   *
+   * ⚠️ 过渡进度**只依赖 state，不在渲染里读 `Date.now()`**：
+   *   渲染不重算，`Date.now()` 读出来的就是上一次某次渲染的旧值，
+   *   于是过渡量会冻结成随机数（第一版踩过）。要取时间就得让它触发重渲染。
+   */
+  const almanac = useMemo(() => {
+    if (almanacMode === 'manual') {
+      const manual = resolveAlmanac('manual', settings.almanacTerm);
+      if (manual) return { ...manual, t: 0, season: termSeason(manual.term) };
+    } else if (almanacMode === 'cycle') {
+      // 起点跟着**真实节气**走，不是从春分重来 —— 否则切到演示模式会凭空回到3 月。
+      const longitude = solarLongitude(now);
+      const anchor = longitude === null ? 0 : Math.floor(longitude / 15);
+      // 每CYCLE_STEP_MS 走一档；前55% 稳停、后 45% 渐变到下一档（见 `cycleBlend`）。
+      const steps = cycleOffset(cycleNow);
+      // `anchor + steps` 可以超过 23 —— `almanacFromLongitude` 内部按 360 取模，天然回绕。
+      const real = almanacFromLongitude((anchor + steps.step) * 15);
+      return { term: real.term, index: real.index, t: cycleBlend(steps.phase), season: real.season };
+    }
+    const longitude = solarLongitude(now);
+    if (longitude === null) {
+      return { term: getSolarTerm(now), index: -1, t: 0, season: getSeason(now, city.latitude) };
+    }
+    return almanacFromLongitude(longitude);
+  }, [almanacMode, settings.almanacTerm, now, cycleNow, city.latitude]);
+
+  /** 渐变后的物候档案（渲染层真正要用的那一组数）。放这里算，别让每帧都重算一遍。 */
+  const almanacProfile = useMemo(
+    () => (almanac.index < 0 ? null : blendTerm(almanac.term, almanac.t)),
+    [almanac.term, almanac.t, almanac.index],
+  );
+
   const matchesCity = snapshot.key === weatherCacheKey(city);
   const data = matchesCity ? normalizeWeather(snapshot.data, city, now) : null;
   const fresh = isWeatherFresh(data, now);
@@ -226,8 +278,14 @@ export function useEnvironment(settings) {
   return {
     city, setCity, locate, locationStatus, locationBusy, locationError,
     data, status, refresh, now,
-    season: settings.season === 'auto' ? getSeason(now, city.latitude) : settings.season,
+    // ★ 季节优先级：手动/演示模式下**节气说了算**。
+    //   否则「翻到冬至却还是满池荷花」—— 时令模式就白设了。
+    //   代价是这两种模式下季节滑杆不生效，所以 SeasonPanel 里必须写明这一点
+    //   （面板已经能看到 `almanacMode`，不能让它成为静默覆盖）。
+    season: almanacMode !== 'follow'
+      ? almanac.season
+      : (settings.season === 'auto' ? getSeason(now, city.latitude) : settings.season),
     weather: settings.weather === 'auto' ? (data?.weather || 'sunny') : settings.weather,
-    night, solarTerm: getSolarTerm(now),
+    night, solarTerm: almanac.term, almanac, almanacProfile, almanacMode,
   };
 }

@@ -40,6 +40,8 @@ const FORWARDED_ELSEWHERE = {
   season: '由 useEnvironment 合成 env.season 后转发',
   weather: '由 useEnvironment 合成 env.weather 后转发',
   day: '由 useEnvironment 合成 env.night 后转发',
+  almanacMode: '由 useEnvironment 解析成 env.solarTerm / env.almanacProfile / env.season 后转发',
+  almanacTerm: '同上（手动指定值只影响解析结果，本身不进引擎）',
   sound: '音频层，不进引擎 options',
   volume: '音频层，不进引擎 options',
 };
@@ -92,4 +94,35 @@ test('★ 每个必须进引擎的设置键，都要出现在 options useMemo �
   assert.deepEqual(missing, [],
     `依赖数组里缺：${missing.join(', ')}`
     + ' —— 缺依赖会让 useMemo 不重算，改了设置界面不动（同样是静默失败）。');
+});
+
+/**
+ * 由 `useEnvironment` 合成、但**必须**进引擎的 `env.*` 键。
+ *
+ * ★ 为什么单独一张表：`MUST_REACH_ENGINE` 全是 `settings.*`，查不到 `env.*`。
+ *   而「节气档案只改了 HUD 文案、没进引擎」正是本项目最典型的那类静默失败 ——
+ *   实机烟测 `tools/check-almanac-ui.cjs` ⑤ 就是为它写的。
+ *   那个烟测要起 dev server，进不了 `npm test`，所以这里留一道便宜的源码护栏。
+ */
+const MUST_REACH_ENGINE_FROM_ENV = ['solarTerm', 'almanacProfile'];
+
+test('★ env 合成的节气字段必须同时出现在 options 的构造段和依赖数组里', () => {
+  const object = optionsObjectSource();
+  const deps = optionsMemoSource().slice(optionsMemoSource().lastIndexOf('},['));
+  for (const key of MUST_REACH_ENGINE_FROM_ENV) {
+    assert.ok(object.includes(`env.${key}`),
+      `options 构造段里没有 env.${key} —— 时令解析的结果没进引擎，画面不会跟着节气变`);
+    assert.ok(deps.includes(`env.${key}`),
+      `依赖数组里没有 env.${key} —— useMemo 不重算，节气变了画面也不动`);
+  }
+});
+
+test('★ 时令模式非 follow 时季节必须由节气决定（否则翻到大雪还是满池荷花）', () => {
+  // 这条断言读源码文本：判据是「useEnvironment 的 return 里，
+  // season 那一行的三元判断了 almanacMode」。断掉它实机烟测会红，
+  // 但这里能提前在 `npm test` 里拦住。
+  const hook = readFileSync(join(ROOT, 'src', 'hooks', 'useEnvironment.js'), 'utf8');
+  assert.ok(/season:\s*almanacMode\s*!==\s*'follow'/.test(hook),
+    'useEnvironment 的 season 没有让位给时令模式 —— '
+    + '「手动指定大雪」只会改文案、季节仍是夏天，用户会以为开关坏了');
 });

@@ -41,15 +41,28 @@ test('non-object or malformed persisted settings restore defaults', (t) => {
 
 test('valid settings survive a storage round trip without unrelated persisted fields', (t) => {
   localStore(t);
-  // ecoMode / ecoSpeed / collision 故意不写进存档：它们必须从默认值补回来（老存档升级路径）。
+  // ecoMode / ecoSpeed / collision / almanacMode / almanacTerm 故意不写进存档：
+  // 它们必须从默认值补回来（老存档升级路径）。
   const settings = { fishSize:1, turtleCount:0, season: 'autumn', weather: 'rainy', day: 'night', fishCount: 24, quality: 'low', reducedMotion: true, sound: true, volume: 0.4 };
   assert.equal(storage.writeStore('fusheng-settings', settings), true);
-  assert.deepEqual(storage.loadSettings(), { ...settings, ecoMode: false, ecoSpeed: 1, collision: true });
+  assert.deepEqual(storage.loadSettings(), { ...settings, ecoMode: false, ecoSpeed: 1, collision: true, almanacMode: 'follow', almanacTerm: '' });
   assert.equal(storage.loadSettings().ecoMode, false);
   assert.equal(storage.loadSettings().ecoSpeed, 1);
   // 碰撞默认**开**：老存档没有这个键 ⇒ 升级后自动获得新行为（这是"鱼不该互相穿透"的基础正确性，
   // 不该要求用户手动打开）。与 ecoMode 默认关的理由不同，别照抄。
   assert.equal(storage.loadSettings().collision, true);
+});
+
+test('a chosen solar term survives a restart (manual mode must persist)', (t) => {
+  // ★ 为什么这条必须存在：手动/演示模式如果不落盘，用户重启后会跳回真实节气，
+  //   看着就像"设置丢了"。而这个 bug 极隐蔽 —— 它只在**重启后**显形，
+  //   单次会话内的所有断言都是绿的。
+  localStore(t, { 'fusheng-settings': JSON.stringify({ almanacMode: 'manual', almanacTerm: '大雪' }) });
+  assert.equal(storage.loadSettings().almanacMode, 'manual');
+  assert.equal(storage.loadSettings().almanacTerm, '大雪');
+  // 过长的term 串（可能来自手改存档）必须退回默认，不能进到画面文案里
+  localStore(t, { 'fusheng-settings': JSON.stringify({ almanacMode: 'manual', almanacTerm: '大雪'.repeat(6) }) });
+  assert.equal(storage.loadSettings().almanacTerm, '');
 });
 
 test('a persisted collision:false is honoured (user opted out)', (t) => {

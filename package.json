@@ -59,7 +59,8 @@
     "probe:school": "node tools/probe-school.js",
     "check:desktop": "node tools/check-desktop-boot.cjs",
     "check:rings": "node tools/check-water-rings.js",
-    "check:caustic": "node tools/probe-caustic.mjs"
+    "check:caustic": "node tools/probe-caustic.mjs",
+    "check:almanac": "node tools/check-almanac-ui.cjs"
   },
   "dependencies": {
     "react": "^19.1.0",

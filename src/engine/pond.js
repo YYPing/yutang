@@ -641,7 +641,13 @@ export class PondEngine extends KoiRenderer {
     const ctx = this.ctx, { weather, season, reducedMotion, quality, night } = this.options;
     const t = reducedMotion ? 0 : this.sim.time;
     if (weather === 'snowy' || season === 'winter') {
-      const deepWinter = ['大雪', '冬至', '小寒', '大寒'].includes(this.options.solarTerm);
+      // ★ 深冬判据改成读物候档案的 `ice`，不再是['大雪','冬至','小寒','大寒'] 白名单。
+      //   白名单有个硬伤：它是**离散**的，于是立冬→大雪之间雪片数会"啪"地跳一档，
+      //   而节气明明是渐变的（决策见 docs/SOLAR-TERM-PLAN.md 第八节）。
+      //   `ice>=.9` 等价于原来那四项（它们都是 1），但阈值化之后就有了连续过渡带。
+      //⚠️ 拿不到档案时（`almanacProfile` 为 null）退回白名单，不能让老存档直接没有深冬。
+      const profile=this.options.almanacProfile;
+      const deepWinter=profile?profile.ice>=.9:['大雪','冬至','小寒','大寒'].includes(this.options.solarTerm);
       const count = weather === 'snowy' ? (quality === 'low' ? 34 : 72) : deepWinter ? 28 : 18;
       for (let i = 0; i < count; i++) {
         const m = this.motes[i];

@@ -7,7 +7,8 @@ export function writeStore(key, value) {
 }
 
 export const DEFAULT_SETTINGS = Object.freeze({
-  season: 'auto', weather: 'auto', day: 'auto', fishCount: 12, fishSize: 1, turtleCount: 0, quality: 'high',
+  season: 'auto', weather: 'auto', day: 'auto', almanacMode: 'follow', almanacTerm: '',
+  fishCount: 12, fishSize: 1, turtleCount: 0, quality: 'high',
   reducedMotion: false, sound: false, volume: 0.18, ecoMode: false, ecoSpeed: 1, collision: true,
 });
 // §3 演化倍速档位。与 engine/simulation.js 的 ECO_SPEEDS 必须一致 ——
@@ -29,6 +30,11 @@ export function loadSettings() {
     season: pick('season', ['auto', 'spring', 'summer', 'autumn', 'winter']),
     weather: source.weather === 'foggy' ? 'stormy' : pick('weather', ['auto', ...WEATHER_TYPES]),
     day: pick('day', ['auto', 'day', 'night']),
+    // 时令模式（F-24）。default `follow` = 跟随真实节气；`manual`/`cycle` 是用户主动选的预览态，
+    // **必须持久化** —— 否则重启后跳回真实节气，用户会以为设置丢了。
+    almanacMode: pick('almanacMode', ['follow', 'manual', 'cycle']),
+    almanacTerm: typeof source.almanacTerm === 'string' && source.almanacTerm.length <= 4
+      ? source.almanacTerm : DEFAULT_SETTINGS.almanacTerm,
     fishCount: Math.round(clampNumber(source.fishCount, 3, 24, DEFAULT_SETTINGS.fishCount)),
     fishSize: clampNumber(source.fishSize, .6, 1.6, 1),
     turtleCount: Math.round(clampNumber(source.turtleCount, 0, 4, 0)),

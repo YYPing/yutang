@@ -73,9 +73,9 @@ export function getDayPhase(date = new Date()) {
  * transition instants are approximate, not an authoritative almanac. Uses the
  * UTC instant (not a fixed table of month/day boundaries or local midnight).
  */
-export function getSolarTerm(date = new Date()) {
+export function solarLongitude(date = new Date()) {
   requireDate(date);
-  if (date.getUTCFullYear() < 1900 || date.getUTCFullYear() > 2100) return '';
+  if (date.getUTCFullYear() < 1900 || date.getUTCFullYear() > 2100) return null;
   const centuries = (date.getTime() / 86_400_000 + 2440587.5 - 2451545) / 36525;
   const normalize = (angle) => ((angle % 360) + 360) % 360;
   const sin = (angle) => Math.sin(angle * Math.PI / 180);
@@ -83,8 +83,13 @@ export function getSolarTerm(date = new Date()) {
   const anomaly = 357.52911 + centuries * (35999.05029 - 0.0001537 * centuries);
   const center = sin(anomaly) * (1.914602 - centuries * (0.004817 + 0.000014 * centuries))
     + sin(2 * anomaly) * (0.019993 - 0.000101 * centuries) + sin(3 * anomaly) * 0.000289;
-  const longitude = normalize(meanLongitude + center - 0.00569 - 0.00478 * sin(125.04 - 1934.136 * centuries));
-  return SOLAR_TERMS[Math.floor(longitude / 15)];
+  return normalize(meanLongitude + center - 0.00569 - 0.00478 * sin(125.04 - 1934.136 * centuries));
+}
+
+/** Reuses solarLongitude so the almanac can interpolate between terms (F-24 渐变). */
+export function getSolarTerm(date = new Date()) {
+  const longitude = solarLongitude(date);
+  return longitude === null ? '' : SOLAR_TERMS[Math.floor(longitude / 15)];
 }
 
 /** Unknown codes deliberately render a neutral cloudy scene, never fabricated sunshine. */
