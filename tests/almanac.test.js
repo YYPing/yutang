@@ -146,8 +146,15 @@ test('★ 物候档案必须自洽：大雪比立冬冷、霜降比白露凉', (
   // ★ 阳性对照：夏至必须是最热的那个（否则上面全绿也没有意义）
   const warmest = SOLAR_TERMS.reduce((a, b) => (termProfile(a).warmth >= termProfile(b).warmth ? a : b));
   assert.equal(warmest, '夏至');
+  // ★ 最冷的是**大寒**（"三九、四九"里四九最冷），不是冬至。
+  //   原断言写的是冬至 —— 那是因为档案把顺序搞反了（冬至 .06 < 小寒 .09），
+  //   断言顺着错数据写，于是"错"和"护栏"互相加固。
+  //   这就是"用实现值反推期望值"的典型后果：护栏变成了同谋。
   const coldest = SOLAR_TERMS.reduce((a, b) => (termProfile(a).warmth <= termProfile(b).warmth ? a : b));
-  assert.equal(coldest, '冬至');
+  assert.equal(coldest, '大寒');
+  // ★ 冬三档必须是**持续降温**（冬至 → 小寒 → 大寒），不能来回摆。
+  assert.ok(termProfile('冬至').warmth > termProfile('小寒').warmth, '冬至应比小寒暖');
+  assert.ok(termProfile('小寒').warmth > termProfile('大寒').warmth, '小寒应比大寒暖');
 });
 
 test('cycleOffset：每 stepMs 整档、phase∈[0,1)，且处理负数与非法 stepMs', () => {

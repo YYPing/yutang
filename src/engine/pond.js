@@ -1,5 +1,6 @@
 import { PondSimulation, DEFAULT_OPTIONS, clamp } from './simulation.js';
 import { renderScale, createFishShadow, watchDeviceScale } from './rendering.js';
+import { visualFor } from './term-visual.js';
 import {Atmosphere} from './atmosphere.js';
 import {Scenery} from './scenery.js';
 import {Landscape} from './landscape.js';
@@ -51,6 +52,19 @@ const ellipse = (ctx, x, y, rx, ry, fill, angle = 0) => {
 };
 
 /**
+ * 两个十六进制色按 t 混合。用于「叶色随冷暖走」这类连续调色。
+ * ⚠️ 不从 `constants.js` 手抄色值 —— 渲染层自己编数是记忆里点过名的坑。
+ */
+function mixHex(a, b, t) {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const k = Math.max(0, Math.min(1, t));
+  const r = Math.round(((pa >> 16) & 255) + (((pb >> 16) & 255) - ((pa >> 16) & 255)) * k);
+  const g = Math.round(((pa >> 8) & 255) + (((pb >> 8) & 255) - ((pa >> 8) & 255)) * k);
+  const bl = Math.round((pa & 255) + ((pb & 255) - (pa & 255)) * k);
+  return `rgb(${r},${g},${bl})`;
+}
+
+/**
  * 层 13 碎光用的小亮斑，**预渲染一次**。
  *
  * ⚠️ 不要每帧 `createRadialGradient` —— 每帧 26 个渐变对象 × 60Hz = 1560 个/秒，
@@ -81,6 +95,9 @@ export class PondEngine extends KoiRenderer {
     this.options = { ...DEFAULT_OPTIONS, ...options };
     this.sim = new PondSimulation(1000, 700, this.options);
     this.images = new Map();
+    // ★ 节气渲染参数。构造函数先给一份中性春，render() 每帧覆盖 ——
+    //   免得第一帧（landscape 还没 onLoad）读undefined。
+    this.termVisual = visualFor(this.options);
     this.shadowSprite = createFishShadow();
     this.sparkleSprite = createSparkleSprite();
     this.atmosphere = new Atmosphere(this.options);
@@ -245,7 +262,14 @@ export class PondEngine extends KoiRenderer {
   render() {
     const ctx = this.ctx;
     if (!ctx || this.destroyed) return;
-    this.landscape.render(this.sim.time, this.options, this.sim.hand);
+    // ★ 每次渲染重算一次「节气 → 渲染参数」。
+    //   为什么放render 里而不是 `updateOptions`：档案在渐变模式下**每帧都在变**
+    //   （`blendTerm` 按黄经连续插值），而 `updateOptions` 只在 options 引用变化时触发。
+    //   放这里保证「节气渐变」是逐帧连续的，而不是每换一次档才跳一下。
+    this.termVisual = visualFor(this.options);
+    // ★ 把渲染参数也放进传给 landscape 的那份 options —— shader 要读它做水色。
+    //   不能直接改 this.options：那会让 useMemo 的引用比对失效、也可能被存档逻辑看到。
+    this.landscape.render(this.sim.time, { ...this.options, termVisual: this.termVisual }, this.sim.hand);
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     ctx.clearRect(0, 0, this.width, this.height);
     ctx.save();
@@ -253,13 +277,20 @@ export class PondEngine extends KoiRenderer {
     // §11.2 层 6「鱼卵群」。卵在池底 / 岸边石缝 ⇒ 画在水色之后、荷叶与鱼之前：
     // 荷叶浮在水面、鱼从卵上方盖过去，都是对的。
     this.drawEggs();
-    if (this.options.season === 'summer') this.drawLotus();
+    // ★ 荷叶改为按档案数量决定，**不再受`season==='summer'` 门控** ——
+    //   春分有 6 片浮叶、霜降还有 4 片枯叶，只有真正的严冬（立春前后）才归零。
+    //   旧门控是"每个节气都一样"的根因之一：24 个节气里只有 6 个能看见荷叶。
+    if (this.termVisual.leafCount > 0) this.drawLotus();
     const turtleScale = clamp(Math.min(this.width / 1250, this.height / 780), .78, 1.15);
     for (const turtle of this.sim.turtles) this.turtleRenderer.draw(ctx, turtle, {scale:turtleScale,night:this.options.night,shadow:true});
     for (const fish of this.sim.fish) this.drawFish(fish, true);
     for (const fish of this.sim.fish) this.drawFish(fish, false);
     for (const turtle of this.sim.turtles) this.turtleRenderer.draw(ctx, turtle, {scale:turtleScale,night:this.options.night});
-    if (this.options.season === 'winter' || this.options.weather === 'snowy') this.drawIce();
+    // ★ 冰层门控从「季节是winter 就整层封」改成**按档案的 ice 值连续调**。
+    //   旧门控是二值的：要么一整层冰、要么没有。而档案里霜降 ice=.15、立冬 .4、
+    //   小雪 .7、大雪 1.0 —— 真实的结冰过程是渐进的（先岸边薄霜、再连片）。
+    //    才画，避免春夏（ice=0）凭空多一层冰膜。
+    if (this.termVisual.ice > 0.02 || this.options.weather === 'snowy') this.drawIce();
     this.scenery.clouds(ctx, this.atmosphere, this.width, this.height, this.options);
     drawSurfaceRipples(ctx, this.sim.time, this.width, this.height, this.options);
     drawShoreRipples(ctx, this.sim.time, this.width, this.height, this.options, this.isWater);
@@ -566,37 +597,77 @@ export class PondEngine extends KoiRenderer {
 
   drawLotus() {
     const ctx = this.ctx, t = this.options.reducedMotion ? 0 : this.sim.time;
-    const pads = [[0.76, 0.93, 26], [0.80, 0.94, 34], [0.835, 0.905, 23]];
-    for (let i = 0; i < pads.length; i++) {
-      const [px, py, size] = pads[i];
-      ctx.save(); ctx.translate(px * this.width, py * this.height + Math.sin(t * 0.5 + i) * 1.6);
-      ctx.rotate(-0.3 + i * 0.7); ctx.scale(1, 0.67);
-      ctx.shadowColor = 'rgba(9,48,31,.24)'; ctx.shadowBlur = 9; ctx.shadowOffsetY = 6;
-      const g = ctx.createRadialGradient(-size * 0.3, -size * 0.3, 2, 0, 0, size);
-      g.addColorStop(0, '#698357'); g.addColorStop(1, '#355f45');
-      ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, size, 0.16, TAU - 0.22); ctx.closePath(); ctx.fill();
-      ctx.shadowBlur = 0; ctx.shadowOffsetY = 0; ctx.strokeStyle = 'rgba(177,181,111,.22)'; ctx.lineWidth = 0.65;
-      for (let j = 1; j < 10; j++) { const a = j / 10 * TAU; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * size * 0.9, Math.sin(a) * size * 0.9); ctx.stroke(); }
-      ctx.restore();
+    // ★ 从「夏至固定 3 片」改成**按节气档案生成**。
+    //   起因：用户反馈「每个节气之间都一样」—— 根因之一就是这里
+    //   硬编码 3 片荷叶 + 1 朵荷花，且整个函数只在 `season==='summer'` 时被调用。
+    //   现在数量与大小都来自 `visual.leafCount / lotusCount`，
+    //   于是「立夏 19 片小叶」到「芒种 22 片大叶」有真实差别。
+    const v = this.termVisual;
+    const pads = v.leafCount;
+    if (pads > 0) {
+      // ★ 位置用**确定性伪随机**（按 index 散布），不用 Math.random() ——
+      //   后者会让荷叶每帧换位置，看起来在抽搐；而且量具无法复现同一画面。
+      const ring = Math.min(1, pads / 22);
+      for (let i = 0; i < pads; i++) {
+        // 沿用旧的三处锚点（0.76/0.93·0.80/0.94·0.835/0.905）作为簇心，逐片在周围散开。
+        const anchor = i % 3;
+        const ax = [0.76, 0.80, 0.835][anchor], ay = [0.93, 0.94, 0.905][anchor];
+        const k = Math.floor(i / 3);
+        // 黄金角散布：第 k 片相对簇心的偏移。乘ring 让"叶多时铺得开"。
+        const ang = k * 2.399963 + anchor * 1.1;
+        const rad = (0.012 + 0.026 * ((k % 5) / 4)) * ring;
+        const px = ax + Math.cos(ang) * rad, py = ay + Math.sin(ang) * rad * 0.62;
+        const size = (15 + 12 * ((i * 7) % 5) / 4) * (0.52 + 0.48 * ring);
+        ctx.save();
+        ctx.translate(px * this.width, py * this.height + Math.sin(t * 0.5 + i) * 1.6);
+        ctx.rotate(-0.3 + i * 0.7); ctx.scale(1, 0.67);
+        ctx.shadowColor = 'rgba(9,48,31,.24)'; ctx.shadowBlur = 9; ctx.shadowOffsetY = 6;
+        const g = ctx.createRadialGradient(-size * 0.3, -size * 0.3, 2, 0, 0, size);
+        // ★ 叶色随冷暖走：夏天深绿 → 秋冬枯黄。用档案的 warmth 而不是季节枚举，
+        //   这样谷雨(.68)与立夏(.74) 的叶色也不同。
+        g.addColorStop(0, mixHex('#698357', '#6b6a4a', 1 - v.warmth));
+        g.addColorStop(1, mixHex('#355f45', '#4a4636', 1 - v.warmth));
+        ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, size, 0.16, TAU - 0.22); ctx.closePath(); ctx.fill();
+        ctx.shadowBlur = 0; ctx.shadowOffsetY = 0; ctx.strokeStyle = 'rgba(177,181,111,.22)'; ctx.lineWidth = 0.65;
+        for (let j = 1; j < 10; j++) { const a = j / 10 * TAU; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * size * 0.9, Math.sin(a) * size * 0.9); ctx.stroke(); }
+        ctx.restore();
+      }
     }
-    ctx.save(); ctx.translate(this.width * 0.815, this.height * 0.90 + Math.sin(t * 0.5) * 1.3);
-    ctx.shadowColor = 'rgba(9,48,31,.24)'; ctx.shadowBlur = 6; ctx.shadowOffsetY = 4;
-    for (let ring = 0; ring < 2; ring++) for (let i = 0; i < 7; i++) {
-      ctx.save(); ctx.rotate(i / 7 * TAU + ring * 0.38);
-      ctx.fillStyle = ring ? '#f6e0cf' : '#d6a6ad';
-      ctx.beginPath(); ctx.moveTo(0, 2); ctx.bezierCurveTo(-8 + ring * 3, -4, -7 + ring * 2, -10, 0, -17 + ring * 6);
-      ctx.bezierCurveTo(7 - ring * 2, -10, 8 - ring * 3, -4, 0, 2); ctx.fill(); ctx.restore();
+    // 荷花：数量按 `lotusCount`（0–5）。大雪是 0 —— 用户明确说过「大雪应该没有花」。
+    const blossoms = v.lotusCount;
+    for (let bIdx = 0; bIdx < blossoms; bIdx++) {
+      const bx = 0.815 - bIdx * 0.035, by = 0.90 - bIdx * 0.022;
+      ctx.save(); ctx.translate(this.width * bx, this.height * by + Math.sin(t * 0.5 + bIdx * 2) * 1.3);
+      ctx.shadowColor = 'rgba(9,48,31,.24)'; ctx.shadowBlur = 6; ctx.shadowOffsetY = 4;
+      for (let ringI = 0; ringI < 2; ringI++) for (let i = 0; i < 7; i++) {
+        ctx.save(); ctx.rotate(i / 7 * TAU + ringI * 0.38);
+        ctx.fillStyle = ringI ? '#f6e0cf' : '#d6a6ad';
+        ctx.beginPath(); ctx.moveTo(0, 2); ctx.bezierCurveTo(-8 + ringI * 3, -4, -7 + ringI * 2, -10, 0, -17 + ringI * 6);
+        ctx.bezierCurveTo(7 - ringI * 2, -10, 8 - ringI * 3, -4, 0, 2); ctx.fill(); ctx.restore();
+      }
+      ellipse(ctx, 0, 0, 3.4, 3.1, '#d3ad57'); ctx.restore();
     }
-    ellipse(ctx, 0, 0, 3.4, 3.1, '#d3ad57'); ctx.restore();
   }
 
   drawIce() {
     const ctx = this.ctx;
     const width = this.width, height = this.height;
     const edge = Math.min(this.width, this.height) * 0.08;
+    // ★ 冰的形态从「一套固定参数」改成**按节气档案连续调**。
+    //   起因：把鱼抽干、动画暂停后重跑 24 档像素验收，发现
+    //   **冬六档（大雪/冬至/小寒/大寒）逐像素完全相同（0.00%）** ——
+    //   这正是用户反馈的「每个节气之间都一样」。
+    //   根因：`term-visual.js` 早就算出了 ice/snow/cracks/iceHole/steam 五个参数，
+    //   而 `drawIce` 这里是**一套硬编码**（固定 5 条裂纹、固定 46 粒岸边雪），
+    //   五个参数**一个都没被消费** —— 又一次「上游算了、下游没用」。
+    const v = this.termVisual;
+    const t = this.options.reducedMotion ? 0 : this.sim.time;
     ctx.save();
     // Drawn above the fish: a clear frozen surface, with koi still visible below.
-    ctx.globalAlpha = this.options.night ? 0.72 : 1;
+    // ★ 整体不透明度随 `ice` 连续变化：霜降(ice=.15)只是薄薄一层雾色，
+    //   大雪(ice=1)才是真正封住。旧代码只有 night/白昼两档。
+    const iceAlpha = (this.options.night ? 0.72 : 1) * (0.30 + 0.70 * v.ice);
+    ctx.globalAlpha = iceAlpha;
     const sheen = ctx.createLinearGradient(0, height, width, 0);
     sheen.addColorStop(0, 'rgba(203,236,235,.018)');
     sheen.addColorStop(0.35, 'rgba(227,246,244,.038)');
@@ -611,28 +682,96 @@ export class PondEngine extends KoiRenderer {
       [[0.90, 0.64], [0.79, 0.60], [0.73, 0.53], [0.66, 0.51], [0.61, 0.45]],
       [[0.73, 0.53], [0.70, 0.63], [0.63, 0.68]],
       [[0.22, 0.91], [0.27, 0.81], [0.37, 0.76], [0.40, 0.70]],
+      [[0.62, 0.18], [0.70, 0.26], [0.78, 0.29]],
+      [[0.15, 0.52], [0.24, 0.55], [0.33, 0.51]],
+      [[0.86, 0.85], [0.76, 0.82], [0.68, 0.86]],
     ];
-    for (let i = 0; i < cracks.length; i++) {
-      ctx.strokeStyle = i % 2 ? 'rgba(232,252,247,.10)' : 'rgba(232,252,247,.17)';
-      ctx.beginPath(); cracks[i].forEach(([x, y], j) => j ? ctx.lineTo(x * width, y * height) : ctx.moveTo(x * width, y * height)); ctx.stroke();
+    // ★ 画几条裂纹由 `cracks` 决定（0.30→最整，0.95→最脆），线长也随它截取。
+    //   旧代码无条件画全部 5 条 ⇒ 冬六档的裂纹一模一样。
+    const crackCount = Math.max(1, Math.round(v.cracks * cracks.length));
+    // 裂纹"脆"⇒ 更亮更细：亮度随 cracks 升，线宽随 cracks 降。
+    const crackAlpha = 0.10 + 0.20 * v.cracks;
+    for (let i = 0; i < crackCount; i++) {
+      const pts = cracks[i];
+      // 长裂纹只在 cracks 高时才画满（脆 = 裂得开 = 裂纹更长）
+      const keep = v.cracks <= 0.64 ? pts.length : Math.max(2, Math.round(pts.length * (0.55 + 0.45 * v.cracks)));
+      ctx.strokeStyle = `rgba(232,252,247,${(i % 2 ? 0.6 : 1) * crackAlpha})`;
+      ctx.lineWidth = 0.85 - 0.35 * v.cracks;
+      ctx.beginPath();
+      for (let j = 0; j < keep; j++) {
+        const [x, y] = pts[j];
+        j ? ctx.lineTo(x * width, y * height) : ctx.moveTo(x * width, y * height);
+      }
+      ctx.stroke();
     }
-    const gradient = ctx.createLinearGradient(0, 0, 0, edge * 1.8);
-    gradient.addColorStop(0, 'rgba(208,237,229,.28)'); gradient.addColorStop(1, 'rgba(217,242,235,0)');
+    // ★ 岸边积雪：厚度随 `snow`（三九最厚、四九略收）。旧代码是固定的一层。
+    const snowEdge = edge * (0.35 + 1.15 * v.snow);
+    const gradient = ctx.createLinearGradient(0, 0, 0, snowEdge * 1.8);
+    gradient.addColorStop(0, `rgba(208,237,229,${0.10 + 0.26 * v.snow})`);
+    gradient.addColorStop(1, 'rgba(217,242,235,0)');
     ctx.fillStyle = gradient;
-    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(this.width, 0); ctx.lineTo(this.width, edge * 0.8);
-    for (let i = 18; i >= 0; i--) ctx.lineTo(this.width * i / 18, edge * (0.62 + Math.sin(i * 2.4) * 0.25));
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(this.width, 0); ctx.lineTo(this.width, snowEdge * 0.8);
+    for (let i = 18; i >= 0; i--) ctx.lineTo(this.width * i / 18, snowEdge * (0.62 + Math.sin(i * 2.4) * 0.25));
     ctx.closePath(); ctx.fill();
     ctx.strokeStyle = 'rgba(222,245,240,.26)'; ctx.lineWidth = 0.7;
-    for (let i = 0; i < 9; i++) {
-      const x = this.width * (i + 0.35) / 9;
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + edge * 0.3, edge * 0.25); ctx.lineTo(x + edge * 0.18, edge * 0.52); ctx.stroke();
+    const fringe = 4 + Math.round(5 * v.snow);
+    for (let i = 0; i < fringe; i++) {
+      const x = this.width * (i + 0.35) / fringe;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + edge * 0.3, snowEdge * 0.25); ctx.lineTo(x + edge * 0.18, snowEdge * 0.52); ctx.stroke();
     }
     // Tiny settled snow grains stay at the banks instead of obscuring the pond.
-    for (let i = 0; i < 46; i++) {
+    // ★ 粒数随 `snow` 变（旧的 46 是写死的）—— 雪厚不只体现在厚度，颗粒密度也要跟着走。
+    const grains = Math.round(12 + 46 * v.snow);
+    for (let i = 0; i < grains; i++) {
       const mote = this.motes[i + 20];
+      if (!mote) break;
       const x = mote.x * width;
-      const bankY = 3 + mote.seed * edge * 0.32;
+      const bankY = 3 + mote.seed * snowEdge * 0.32;
       ellipse(ctx, x, i % 2 ? bankY : height - bankY, 0.65 + mote.size * 0.42, 0.5 + mote.size * 0.3, 'rgba(241,251,245,.56)');
+    }
+    ctx.globalAlpha = 1;
+    this.drawIceHole(t);
+    ctx.restore();
+  }
+
+  /**
+   * 冬季的「活水泉眼」—— 冰层下那一小块不结冰的水。
+   *
+   * ★ 这是用户明确要的（"冬季留一处活水泉眼"）。参数在 `term-visual.js` 里
+   *   就算好了（`iceHole` 半径 / `steam` 蒸汽强度），但上一轮只算不画。
+   * ⚠️ 泉眼半径**不能只由 `ice` 推**：`ice` 在大雪/冬至/小寒/大寒全是 1（饱和），
+   *   那样四档的泉眼会一模一样。真正的旋钮是 `deepWinter`（深冬序号）。
+   */
+  drawIceHole(t) {
+    const ctx = this.ctx;
+    const v = this.termVisual;
+    if (!(v.iceHole > 0)) return;
+    // 位置放在左下偏中 —— 避开右下角的荷叶簇（drawLotus 的锚点在 .76~.835 × .9）。
+    const cx = this.width * 0.235, cy = this.height * 0.735;
+    const r = v.iceHole * this.width;
+    ctx.save();
+    // 活水：把冰"挖开"—— 先用不透明的水色盖掉冰层，再画一圈薄冰的破口。
+    const water = ctx.createRadialGradient(cx, cy, r * 0.15, cx, cy, r);
+    water.addColorStop(0, 'rgba(24,64,72,.92)');
+    water.addColorStop(0.72, 'rgba(31,78,84,.80)');
+    water.addColorStop(1, 'rgba(48,96,98,.55)');
+    ctx.fillStyle = water;
+    ctx.beginPath(); ctx.ellipse(cx, cy, r, r * 0.74, -0.22, 0, TAU); ctx.fill();
+    // 破口的冰缘：白而略毛
+    ctx.strokeStyle = `rgba(238,251,246,${0.30 + 0.34 * v.cracks})`;
+    ctx.lineWidth = 1.15;
+    ctx.beginPath(); ctx.ellipse(cx, cy, r * 1.06, r * 0.79, -0.22, 0, TAU); ctx.stroke();
+    // 蒸汽：三缕随时间起伏的淡白（reducedMotion 时静止）
+    const puffs = 3;
+    for (let i = 0; i < puffs; i++) {
+      const ph = t * 0.6 + i * 2.1;
+      const rise = ((ph % 3) / 3);
+      const py = cy - r * 0.5 - rise * r * 1.55;
+      const px = cx + Math.sin(ph * 0.9) * r * 0.30 * (0.4 + 0.6 * rise);
+      const pr = r * (0.30 + 0.52 * rise);
+      // 越升越淡（散开）
+      ctx.fillStyle = `rgba(238,250,248,${0.16 * v.steam * (1 - rise)})`;
+      ctx.beginPath(); ctx.ellipse(px, py, pr, pr * 0.82, 0, 0, TAU); ctx.fill();
     }
     ctx.restore();
   }
@@ -646,11 +785,19 @@ export class PondEngine extends KoiRenderer {
       //   而节气明明是渐变的（决策见 docs/SOLAR-TERM-PLAN.md 第八节）。
       //   `ice>=.9` 等价于原来那四项（它们都是 1），但阈值化之后就有了连续过渡带。
       //⚠️ 拿不到档案时（`almanacProfile` 为 null）退回白名单，不能让老存档直接没有深冬。
-      const profile=this.options.almanacProfile;
-      const deepWinter=profile?profile.ice>=.9:['大雪','冬至','小寒','大寒'].includes(this.options.solarTerm);
-      const count = weather === 'snowy' ? (quality === 'low' ? 34 : 72) : deepWinter ? 28 : 18;
-      for (let i = 0; i < count; i++) {
-        const m = this.motes[i];
+      //
+      // ★★★ 雪片数也从二值改成**连续**（原 `deepWinter?28:18`）。
+      //   `ice>=.9` 判定让立冬(.4)/小雪(.7) 都拿到 18 片、大雪/冬至/小寒/大寒
+      //   一起拿到 28 片 ⇒ 冬四档的**飞雪完全一样**。
+      //   抽干鱼+暂停后重跑像素验收，正是这一条把冬六档压到 0.00%。
+      //   现在改成由 `ice` 连续插值：18 片是"刚有寒意"，32 片是"大雪"。
+      const v = this.termVisual;
+      const count = weather === 'snowy'
+        ? (quality === 'low' ? 34 : 72)
+        : Math.round(14 + 18 * v.ice);
+      const flurries = Math.round(34 * v.snow);
+      for (let i = 0; i < count + flurries; i++) {
+        const m = this.motes[i % this.motes.length];
         const x = (m.x * (this.width + 80) + Math.sin(t * 0.3 + i) * 18 + t * 4) % (this.width + 80) - 40;
         const y = (m.y * (this.height + 40) + t * (9 + m.seed * 15)) % (this.height + 40) - 20;
         ctx.globalAlpha = 0.38 + m.seed * 0.5;

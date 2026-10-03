@@ -37,25 +37,54 @@ const TERM_PROFILE = Object.freeze({
   清明: { warmth: .62, lotus: 0,   leaf: .45, litter: 0,   frost: 0,   ice: 0 },
   谷雨: { warmth: .68, lotus: .1, leaf: .7,  litter: 0,   frost: 0,   ice: 0 },
   立夏: { warmth: .74, lotus: .3, leaf: .85, litter: 0,   frost: 0,   ice: 0 },
-  小满: { warmth: .80, lotus: .55,leaf: .95, litter: 0,   frost: 0,   ice: 0 },
-  芒种: { warmth: .86, lotus: .75,leaf: 1,   litter: 0,   frost: 0,   ice: 0 },
-  夏至: { warmth: 1.0, lotus: 1,   leaf: 1,   litter: 0,   frost: 0,   ice: 0 },
-  小暑: { warmth: 1.0, lotus: 1,   leaf: 1,   litter: 0,   frost: 0,   ice: 0 },
-  大暑: { warmth: .96, lotus: .95, leaf: 1,   litter: 0,   frost: 0,   ice: 0 },
-  立秋: { warmth: .86, lotus: .6,  leaf: .9,  litter: .1,  frost: 0,   ice: 0 },
+  小满: { warmth: .80, lotus: .55,leaf: .90, litter: 0,   frost: 0,   ice: 0 },
+  芒种: { warmth: .86, lotus: .78,leaf: .96, litter: 0,   frost: 0,   ice: 0 },
+  // ★ warmth/leaf 留一点余量（.99 而非 1）：铁律③「连续优先于精确」——
+  //   撞上界会让 `warmth==1` 的档与邻档在**色调与荷叶**上同时饱和。
+  //   夏至(1.00)与小暑(.93) 的 warmth 差 .07 已够，但 leaf 都是 1（22 片），
+  //   于是两档之间只剩"荷花 5 vs 4"这一项，量具实测只剩 0.20% 像素差。
+  //   留 .01 的余量让小暑能拉开，物理上也对：夏至前后是一年最热，
+  //   但并非"此后每天都在变冷"——峰值之后有一个平台期。
+  夏至: { warmth: .99,  lotus: 1,   leaf: 1,   litter: 0,   frost: 0,   ice: 0 },
+  // ★ 小暑 / 大暑 不再与夏至同值。
+  //   起因：接入渲染参数后 `probe-terms` 报「夏至→小暑 距离 = 0.0」——
+  //   这两档档案**逐字段完全相同**，于是画面上根本无法区分（用户反馈「都一样」）。
+  //   按真实物候差异拉开：夏至荷花最盛、叶片最密、暑热顶点；
+  //   小暑入伏、午后雷雨 ⇒ 暑热略减、荷花开始收（lotus↓）而荷叶仍最盛（leaf 保持 1）；
+  //   大暑一年最闷热、多雷暴，荷叶开始枯边（leaf↓）并偶有落叶（litter 从0 起）。
+  小暑: { warmth: .93,  lotus: .82, leaf: .96, litter: 0,   frost: 0,   ice: 0 },
+  大暑: { warmth: .90,  lotus: .62, leaf: .98, litter: .04, frost: 0,   ice: 0 },
+  立秋: { warmth: .82, lotus: .6,  leaf: .88, litter: .1,  frost: 0,   ice: 0 },
   处暑: { warmth: .76, lotus: .3,  leaf: .75, litter: .3,  frost: 0,   ice: 0 },
   白露: { warmth: .66, lotus: .08, leaf: .55, litter: .6,  frost: 0,   ice: 0 },
   秋分: { warmth: .58, lotus: 0,   leaf: .4,  litter: 1,   frost: 0,   ice: 0 },
   寒露: { warmth: .48, lotus: 0,   leaf: .3,  litter: .9,  frost: .2,  ice: 0 },
   霜降: { warmth: .38, lotus: 0,   leaf: .2,  litter: .7,  frost: .8,  ice: .15 },
-  立冬: { warmth: .28, lotus: 0,   leaf: .1,  litter: .5,  frost: 1,   ice: .4 },
-  小雪: { warmth: .20, lotus: 0,   leaf: .05, litter: .3,  frost: 1,   ice: .7 },
-  大雪: { warmth: .12, lotus: 0,   leaf: 0,   litter: .15, frost: 1,   ice: 1 },
-  冬至: { warmth: .06, lotus: 0,   leaf: 0,   litter: .1,  frost: 1,   ice: 1 },
-  小寒: { warmth: .10, lotus: 0,   leaf: 0,   litter: .1,  frost: 1,   ice: 1 },
-  大寒: { warmth: .18, lotus: 0,   leaf: 0,   litter: .1,  frost: 1,   ice: .9 },
-  立春: { warmth: .30, lotus: 0,   leaf: .1,  litter: .15, frost: .6,  ice: .45 },
-  雨水: { warmth: .40, lotus: 0,   leaf: .2,  litter: .1,  frost: .2,  ice: .12 },
+  立冬: { warmth: .28, lotus: 0,   leaf: .1,  litter: .5,  frost: 1,   ice: .4,  deepWinter: .20 },
+  小雪: { warmth: .20, lotus: 0,   leaf: .05, litter: .3,  frost: 1,   ice: .7,  deepWinter: .48 },
+  大雪: { warmth: .12, lotus: 0,   leaf: 0,   litter: .15, frost: 1,   ice: 1,   deepWinter: .74 },
+// ★★★ 冬六档：这里是"用连续量表达离散事实"的反面教材，完整记录以免重犯。
+//
+//   起因：用户反馈「每个节气之间都一样」。冬六档（大雪/冬至/小寒/大寒）
+//   **全部 ice=1、frost=1、leaf=0、lotus=0、焦散全压到 .006**
+//   ⇒ 在画面上几乎逐像素相同。
+//
+//   修的过程走了三轮弯路，每轮只把探针的「最接近相邻档距离」从 0.1 推到 0.3：
+//     ① 调档案数值（把冬至 warmth 从 .06 改到 .10）
+//     ② 加 snow/cracks 两维并从 warmth 反推 ⇒ **饱和**（小寒/大寒都夹到 1.0）
+//     ③ 把 sin 曲线改成分段、让末端分岔
+//   每轮只涨 0.1，因为**方向本身错了**：
+//   连续量（温度）表达不了离散的事实 ——「三九 / 四九」是"第几个九"，不是"多少度"。
+//
+//   正解：档案直接给出**冰形态序号** `deepWinter`
+//   （立冬起冰 → 小雪加厚 → 大雪冰封 → 三九最整 → 四九最脆），
+//   渲染层只做一次线性映射，不再二次加工。
+//   ★ 同一教训也写在 term-visual.js 的文件头。
+  冬至: { warmth: .10, lotus: 0,   leaf: 0,   litter: .12, frost: 1,   ice: 1,   deepWinter: .90 },
+  小寒: { warmth: .05, lotus: 0,   leaf: 0,   litter: .1,  frost: 1,   ice: 1,   deepWinter: 1.0 },
+  大寒: { warmth: .02, lotus: 0,   leaf: 0,   litter: .08, frost: 1,   ice: .95, deepWinter: .97 },
+  立春: { warmth: .30, lotus: 0,   leaf: .1,  litter: .15, frost: .6,  ice: .45 , deepWinter: .45 },
+  雨水: { warmth: .40, lotus: 0,   leaf: .2,  litter: .1,  frost: .2,  ice: .12 , deepWinter: .12 },
   惊蛰: { warmth: .50, lotus: .05,leaf: .35, litter: 0,   frost: 0,   ice: 0 },
 });
 
@@ -107,6 +136,11 @@ export function blendTerm(term, t = 0) {
     litter: mix(a.litter, b.litter, t),
     frost: mix(a.frost, b.frost, t),
     ice: mix(a.ice, b.ice, t),
+    // ★ `deepWinter` 必须一起插值。它是"冰层序号"（0–1），
+    //   漏掉它 ⇒ 从「大雪」渐变到「小雪」时冰的形态会**跳变**而不是过渡，
+    //   而这正好是 §八「节气切换用渐变」要避免的东西。
+    //   非冬季档位没有这个键 ⇒ 用 0 兜底（`?? 0`），中性档案同理。
+    deepWinter: mix(a.deepWinter ?? 0, b.deepWinter ?? 0, t),
   };
 }
 

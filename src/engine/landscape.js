@@ -5,6 +5,9 @@ const vertex=`attribute vec2 aPosition;varying vec2 vUv;void main(){vUv=(aPositi
 const fragment=`precision highp float;
 uniform sampler2D uImage;uniform vec2 uCover;uniform vec2 uSize;uniform vec2 uTexel;uniform vec3 uPointer;uniform float uTime;uniform float uWind;uniform float uMotion;uniform float uClarity;
 uniform float uCausticInk;uniform float uCausticScale;uniform float uCausticWarp;uniform float uCausticWarpSpeed;uniform float uCausticDrift;uniform float uCausticSharp;uniform float uCausticGate;uniform float uCausticShallow;
+/* F-24 per-term tint: lets 24 solar terms differ even though there are
+   only 4 background images; the tint applies over water only. */
+uniform vec3 uTermTint;uniform float uTermTintAmt;
 varying vec2 vUv;
 float oval(vec2 p,vec2 c,vec2 s){return 1.-smoothstep(.55,1.,length((p-c)/s));}
 /* Water-surface caustic net (F-10.5 companion).
@@ -50,6 +53,16 @@ void main(){
  /* Caustic net: light is added, never subtracted, and only where the mask says water.
     Shallow edges get a brighter/denser mesh; deep centre stays quiet so the
     F-10.5 "dark corner .67" measurement does not move. */
+ /* Per-term water tint (F-24): 24 terms share only 4 background images, so the
+    tint is what actually separates the six terms of one season.
+    Mixed over the water mask only - the banks keep their painted colour.
+    ⚠️ This block lives inside a JS template string: no backticks, no // comments. */
+ if(uTermTintAmt>0.){
+  /* Push the water toward the term's tint while keeping some of the original
+     hue: a full replacement would look like a colour filter over a photo. */
+  vec3 tinted=mix(color,color*uTermTint,water*uTermTintAmt);
+  color=tinted;
+ }
  if(uCausticInk>0.){
   float shallow=smoothstep(.34,.02,length(uv-vec2(.5)));   /* 1 near the banks */
   float net=causticNet(uv*uCausticScale, uMotion>0.?uTime:0.);
@@ -82,7 +95,7 @@ export class Landscape{
   const vs=shader(gl.VERTEX_SHADER,vertex),fs=shader(gl.FRAGMENT_SHADER,fragment),p=gl.createProgram();gl.attachShader(p,vs);gl.attachShader(p,fs);gl.linkProgram(p);gl.deleteShader(vs);gl.deleteShader(fs);if(!gl.getProgramParameter(p,gl.LINK_STATUS)){gl.deleteProgram(p);throw Error('Landscape program unavailable')}
   this.program=p;gl.useProgram(p);this.buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,this.buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
   const pos=gl.getAttribLocation(p,'aPosition');gl.enableVertexAttribArray(pos);gl.vertexAttribPointer(pos,2,gl.FLOAT,false,0,0);
-  this.uniforms=Object.fromEntries(['uImage','uCover','uSize','uTexel','uPointer','uTime','uWind','uMotion','uClarity','uCausticInk','uCausticScale','uCausticWarp','uCausticWarpSpeed','uCausticDrift','uCausticSharp','uCausticGate','uCausticShallow'].map(n=>[n,gl.getUniformLocation(p,n)]));gl.uniform1i(this.uniforms.uImage,0);
+  this.uniforms=Object.fromEntries(['uImage','uCover','uSize','uTexel','uPointer','uTime','uWind','uMotion','uClarity','uCausticInk','uCausticScale','uCausticWarp','uCausticWarpSpeed','uCausticDrift','uCausticSharp','uCausticGate','uCausticShallow','uTermTint','uTermTintAmt'].map(n=>[n,gl.getUniformLocation(p,n)]));gl.uniform1i(this.uniforms.uImage,0);
   const viewport=gl.getParameter(gl.MAX_VIEWPORT_DIMS);
   this.maxSurfaceSize=Math.min(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE),viewport[0],viewport[1]);
   this.lastDraw=null;this.ready=true;
@@ -141,12 +154,62 @@ export class Landscape{
   gl.uniform1f(u.uClarity,options.desktopMode&&options.quality!=='low'?.28:0);
   // Caustic net: amplitude is the product of weather and season gates. Low quality
   // drops it entirely — the mesh is a high-frequency texture and aliases badly.
-  const caustic=options.quality==='low'?0:CAUSTIC.ink*(CAUSTIC.weather[options.weather]??1)*(CAUSTIC.season[options.season]??1);
+  // ★ 焦散强度改由 options.termVisual.causticInk 决定（它已经含 weather/season 门控
+  //   与 warmth 连续调制，见 term-visual.js）。没有 termVisual 时退回旧的四季查表 ——
+  //   老存档 / 无档案路径必须还能正常渲染，不能因为新通道缺失就黑屏。
+  const v=options.termVisual;
+  const caustic=options.quality==='low'?0
+    :(v?v.causticInk:CAUSTIC.ink*(CAUSTIC.weather[options.weather]??1)*(CAUSTIC.season[options.season]??1));
   gl.uniform1f(u.uCausticInk,options.reducedMotion?caustic*.35:caustic);
   gl.uniform1f(u.uCausticScale,CAUSTIC.scale);gl.uniform1f(u.uCausticWarp,CAUSTIC.warp);
   gl.uniform1f(u.uCausticWarpSpeed,CAUSTIC.warpSpeed);gl.uniform1f(u.uCausticDrift,CAUSTIC.driftSpeed);
   gl.uniform1f(u.uCausticSharp,CAUSTIC.sharpness);gl.uniform1f(u.uCausticGate,CAUSTIC.gate);
   gl.uniform1f(u.uCausticShallow,CAUSTIC.shallowGain);
+  /* Per-term water tint. Neutral multiplier (1,1,1) when there is no profile, so
+     the image is untouched on the legacy path. */
+  if(u.uTermTint&&v){
+   /* ★★★ 这三个基址/跨度是**按 tint 的实际取值域反推**的，不是拍脑袋。
+    *   旧写法 `0.72 + tintR*0.56`：tintR 的定义域是 .30(隆冬)~.55(盛夏)，
+    *   于是 R 落在 .888~1.028、G 落在 .936~1.014 —— **两端都溢出 1.0**。
+    *   后果是芒种/夏至/小暑/大暑/立秋的 R、G 全被 clamp 成 1.0，
+    *   五档之间在水色上**完全无差别**（像素验收实测 夏至→小暑 仅 0.128%，
+    *   远低于噪声底的 4 倍）。
+    *   正解：把定义域端点**严格对齐**到目标区间 ——
+    *   `base + tint*(1-base)`，其中 base 是"该通道最暗端"落在的下界。
+    *   这样 0.30→base、0.55→1.0，全域严丝合缝，一档不浪费。
+    *   B 通道同理：旧值 `0.74 + tintB*0.42` 落在 .999~1.16，也整段溢出。
+    *   ⚠️ 别为了"更饱和"而让某通道 >1：>1 会被 clamp，而 clamp 掉的那段
+    *      正是**档间差异最密的地方**（盛夏几档 tintR 只差 .01~.02）。
+    *      溢出等于把差异扔掉。
+    */
+   // ⚠️ 基址 = 「最暗端落在哪」，它**直接决定摆幅**。
+   //   .86 ⇒ tint 的全部定义域只映射到 .86~1.00 = 0.14 宽 ⇒ 相邻档水色差仅 0.5~0.9 灰阶
+   //   （实测 夏至→小暑 0.62、惊蛰→春分 0.71）—— 肉眼根本读不出，等于白给。
+   //   .70 ⇒ 摆幅 0.30，是 .86 的 2.1 倍 ⇒ 同样的档案差能到 1.3~1.9 灰阶。
+   //   下界不能更低：再低就偏离"水色仍是水"读起来像滤镜（上界已经是 1.0，不能再高）。
+   //   ★ 记一条：**把一个量映射到 [0,1] 时，基址/跨度必须由「实际取值域」反推，
+   //     不能拍脑袋选个"看起来温和"的下界** —— 温和的下界等于温和的差异。
+   // ⚠️ 基址 = 「最暗端落在哪」，它**直接决定摆幅**。
+   //   .86 ⇒ tint 的全部定义域只映射到 .86~1.00 = 0.14 宽 ⇒ 相邻档水色差仅 0.5~0.9 灰阶
+   //   （实测 夏至→小暑 0.62、惊蛰→春分 0.71）—— 肉眼根本读不出，等于白给。
+   //   .70 ⇒ 摆幅 0.30，是 .86 的 2.1 倍 ⇒ 同样的档案差能到 1.3~1.9 灰阶。
+   //   下界不能更低：再低就偏离"水色仍是水"读起来像滤镜（上界已经是 1.0，不能再高）。
+   //   ★ 记一条：**把一个量映射到 [0,1] 时，基址/跨度必须由「实际取值域」反推，
+   //     不能拍脑袋选个"看起来温和"的下界** —— 温和的下界等于温和的差异。
+   const TINT_BASE = [0.70, 0.78, 0.66];   // 三通道各自的"最暗端"下界
+   gl.uniform3f(u.uTermTint,
+     TINT_BASE[0] + v.tintR * (1 - TINT_BASE[0]),
+     TINT_BASE[1] + v.tintG * (1 - TINT_BASE[1]),
+     TINT_BASE[2] + v.tintB * (1 - TINT_BASE[2]));
+   /* amount scales with how far the term is from mid-season: the further the
+      warmth, the stronger the tint - otherwise spring terms all look identical.
+      ★ 下界抬到 .28：旧值 `|warmth-.55|*2.1` 在春分(0.42) 只有 .063，
+      *   春分与惊蛰的水色差被压到几乎为零 ⇒ 这两档看着一样。
+      *   .28 让最"中性"的档位也有可见的水色，档间差不再被 amt 二次压扁。 */
+   gl.uniform1f(u.uTermTintAmt,0.28+Math.min(1,Math.abs(v.warmth-0.55)*2.1)*0.72);
+  }else if(u.uTermTint){
+   gl.uniform3f(u.uTermTint,1,1,1);gl.uniform1f(u.uTermTintAmt,0);
+  }
   gl.uniform1f(u.uTime,time);gl.uniform1f(u.uWind,windStrength(options.weather,options.season));gl.uniform1f(u.uMotion,options.reducedMotion?0:1);gl.drawArrays(gl.TRIANGLES,0,6);
  }
  destroy(){
