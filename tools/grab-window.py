@@ -67,6 +67,18 @@ if not ok or lines == 0:
     print(f'PrintWindow 失败（ok={ok}, lines={lines}）—— 窗口可能被最小化')
     sys.exit(3)
 
+# ⚠️⚠️ 最小化时 PrintWindow **会返回成功**（ok≠0、lines≠0）但画出的是一张废图。
+#   实测：窗口最小化时客户区缩到 199×34，脚本照常"成功"返回并把它写进了 frame-a/b，
+#   于是 diff-frames.py 拿两帧废图一比，报「0.00% 像素变化」——
+#   看起来像画面死了，其实渲染完全正常。
+#   ⇒ 这里必须加尺寸下限：**宁可报错，也不要产出废帧**。
+#   判据用 400px（正常窗口最小也在几百像素；199×34 那种一眼就是废图）。
+MIN_SIDE = 400
+if min(w, h) < MIN_SIDE:
+    print(f'拒绝保存：窗口只有 {w}×{h}（最小侧<{MIN_SIDE}）—— 这几乎肯定是最小化状态的废图。')
+    print('  先恢复窗口（ShowWindow SW_RESTORE）再抓，否则下游差分会拿到两帧一样的垃圾。')
+    sys.exit(4)
+
 from PIL import Image, ImageStat
 img = Image.frombytes('RGBA', (w, h), buf.raw, 'raw', 'BGRA').convert('RGB')
 img.save(OUT)
