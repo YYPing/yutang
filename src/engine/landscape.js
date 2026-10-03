@@ -1,14 +1,35 @@
 import {windStrength} from './atmosphere.js';
 import {landscapeDimensions} from './rendering.js';
+import {CAUSTIC} from './light-field.js';
 const vertex=`attribute vec2 aPosition;varying vec2 vUv;void main(){vUv=(aPosition+1.0)*.5;gl_Position=vec4(aPosition,0.,1.);}`;
 const fragment=`precision highp float;
-uniform sampler2D uImage;uniform vec2 uCover;uniform vec2 uSize;uniform vec2 uTexel;uniform vec3 uPointer;uniform float uTime;uniform float uWind;uniform float uMotion;uniform float uClarity;varying vec2 vUv;
+uniform sampler2D uImage;uniform vec2 uCover;uniform vec2 uSize;uniform vec2 uTexel;uniform vec3 uPointer;uniform float uTime;uniform float uWind;uniform float uMotion;uniform float uClarity;
+uniform float uCausticInk;uniform float uCausticScale;uniform float uCausticWarp;uniform float uCausticWarpSpeed;uniform float uCausticDrift;uniform float uCausticSharp;uniform float uCausticGate;uniform float uCausticShallow;
+varying vec2 vUv;
 float oval(vec2 p,vec2 c,vec2 s){return 1.-smoothstep(.55,1.,length((p-c)/s));}
+/* Water-surface caustic net (F-10.5 companion).
+   Domain-warped periodic grid: fract() makes cell COUNT a real control.
+   WARNING - plain (uv*scale) would only change cell SIZE, not density: the
+   duty cycle stays ~19% at every scale and the net reads as flat grey fog.
+   Measured by tools/probe-caustic.mjs; do not "simplify" this back.
+   NOTE this whole block lives inside a JS template string: never use a
+   backtick or a // line comment in here, both break the build.
+   uCausticInk is the only amplitude knob. */
+float causticNet(vec2 p,float t){
+ vec2 drift=vec2(t*.13,-t*.09);
+ vec2 q=p;
+ /* domain warp: two incommensurate drift rates so the mesh never looks translated */
+ q+=.42*vec2(sin(p.y*2.3+t*.26),cos(p.x*1.9-t*.21));
+ q+=.24*vec2(sin(p.x*3.1-t*.19),cos(p.y*2.7+t*.17));
+ vec2 cell=fract((q+drift)*2.6)-.5;
+ /* ridge of cell-local Chebyshev distance: bright at borders, dark at centres */
+ float d=max(abs(cell.x),abs(cell.y));
+ return pow(clamp(1.-smoothstep(0.,.30,d),0.,1.),1.6);
+}
 void main(){
  vec2 screen=vec2(vUv.x,1.-vUv.y),uv=(screen-.5)*uCover+.5;
  vec3 original=texture2D(uImage,uv).rgb;
  // Animate only saturated leaf/blade pixels inside local rooted plant patches.
- // No displacement or oscillating lighting is applied to the water, soil or rocks.
  float water=smoothstep(.015,.08,min(original.g,original.b)-original.r);
  float chroma=max(original.r,original.g)-original.b;
  float plantColor=smoothstep(.09,.25,chroma)*(1.-water);
@@ -26,6 +47,16 @@ void main(){
  vec2 bend=vec2(gust*(1.7+uWind*1.5)+nearHand*sign(pointDelta.x)*2.8,sin(uTime*.7+uv.x*18.)*.65);
  vec2 sampleUv=clamp(uv+bend/uSize*uCover*foliage*uMotion,vec2(.0001),vec2(.9999));
  vec3 color=texture2D(uImage,sampleUv).rgb;
+ /* Caustic net: light is added, never subtracted, and only where the mask says water.
+    Shallow edges get a brighter/denser mesh; deep centre stays quiet so the
+    F-10.5 "dark corner .67" measurement does not move. */
+ if(uCausticInk>0.){
+  float shallow=smoothstep(.34,.02,length(uv-vec2(.5)));   /* 1 near the banks */
+  float net=causticNet(uv*uCausticScale, uMotion>0.?uTime:0.);
+  net=smoothstep(uCausticGate,1.,net);
+  float amount=uCausticInk*net*(.45+uCausticShallow*shallow)*water*uMotion;
+  color+=vec3(.62,.86,1.)*amount;   // cool daylight tint, not white
+ }
  // A restrained edge-contrast correction counters the illustration's soft
  // scaling; it does not invent texture detail. Clamp it to prevent bright halos.
  if(uClarity>0.){
@@ -51,7 +82,7 @@ export class Landscape{
   const vs=shader(gl.VERTEX_SHADER,vertex),fs=shader(gl.FRAGMENT_SHADER,fragment),p=gl.createProgram();gl.attachShader(p,vs);gl.attachShader(p,fs);gl.linkProgram(p);gl.deleteShader(vs);gl.deleteShader(fs);if(!gl.getProgramParameter(p,gl.LINK_STATUS)){gl.deleteProgram(p);throw Error('Landscape program unavailable')}
   this.program=p;gl.useProgram(p);this.buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,this.buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
   const pos=gl.getAttribLocation(p,'aPosition');gl.enableVertexAttribArray(pos);gl.vertexAttribPointer(pos,2,gl.FLOAT,false,0,0);
-  this.uniforms=Object.fromEntries(['uImage','uCover','uSize','uTexel','uPointer','uTime','uWind','uMotion','uClarity'].map(n=>[n,gl.getUniformLocation(p,n)]));gl.uniform1i(this.uniforms.uImage,0);
+  this.uniforms=Object.fromEntries(['uImage','uCover','uSize','uTexel','uPointer','uTime','uWind','uMotion','uClarity','uCausticInk','uCausticScale','uCausticWarp','uCausticWarpSpeed','uCausticDrift','uCausticSharp','uCausticGate','uCausticShallow'].map(n=>[n,gl.getUniformLocation(p,n)]));gl.uniform1i(this.uniforms.uImage,0);
   const viewport=gl.getParameter(gl.MAX_VIEWPORT_DIMS);
   this.maxSurfaceSize=Math.min(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE),viewport[0],viewport[1]);
   this.lastDraw=null;this.ready=true;
@@ -108,6 +139,14 @@ export class Landscape{
   gl.uniform2f(u.uSize,this.width,this.height);gl.uniform3f(u.uPointer,(hand.x||0)/this.width,(hand.y||0)/this.height,Math.min(1,hand.life||0));
   const image=this.images.get(season);gl.uniform2f(u.uTexel,1/image.naturalWidth,1/image.naturalHeight);
   gl.uniform1f(u.uClarity,options.desktopMode&&options.quality!=='low'?.28:0);
+  // Caustic net: amplitude is the product of weather and season gates. Low quality
+  // drops it entirely — the mesh is a high-frequency texture and aliases badly.
+  const caustic=options.quality==='low'?0:CAUSTIC.ink*(CAUSTIC.weather[options.weather]??1)*(CAUSTIC.season[options.season]??1);
+  gl.uniform1f(u.uCausticInk,options.reducedMotion?caustic*.35:caustic);
+  gl.uniform1f(u.uCausticScale,CAUSTIC.scale);gl.uniform1f(u.uCausticWarp,CAUSTIC.warp);
+  gl.uniform1f(u.uCausticWarpSpeed,CAUSTIC.warpSpeed);gl.uniform1f(u.uCausticDrift,CAUSTIC.driftSpeed);
+  gl.uniform1f(u.uCausticSharp,CAUSTIC.sharpness);gl.uniform1f(u.uCausticGate,CAUSTIC.gate);
+  gl.uniform1f(u.uCausticShallow,CAUSTIC.shallowGain);
   gl.uniform1f(u.uTime,time);gl.uniform1f(u.uWind,windStrength(options.weather,options.season));gl.uniform1f(u.uMotion,options.reducedMotion?0:1);gl.drawArrays(gl.TRIANGLES,0,6);
  }
  destroy(){
