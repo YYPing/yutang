@@ -31,6 +31,7 @@
     "eco:tune": "node tools/tune.js",
     "desktop": "pnpm build && pnpm build:native && electron .",
     "desktop:local": "node tools/launch-desktop.cjs",
+    "desktop:hidden": "electron . --no-sandbox --disable-gpu-sandbox --no-proxy-server",
     "package:mac": "pnpm build && pnpm build:native && electron-builder --mac dir --arm64",
     "build:native": "node electron/build-native.cjs",
     "test:desktop": "node --test electron/policy.test.cjs",

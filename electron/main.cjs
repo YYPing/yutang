@@ -3,6 +3,7 @@ const { app, BrowserWindow, Menu, Tray, nativeImage, screen, globalShortcut, ipc
 const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
+const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { allowedEntry, requireBoolean, pointForBounds, parseHelperLine, displayMetrics } = require('./policy.cjs');
 
@@ -36,6 +37,57 @@ if (!app.isPackaged && process.env.VITE_DEV_SERVER_URL) {
     throw new Error('Development UI must use a loopback HTTP origin and root path.');
   }
   entryURL = candidate.href;
+}
+
+/* --- 内置静态服务（让 electron.exe 能直接当启动入口，无需 node + 控制台）--------
+ * 动机：此前桌面版必须靠 `node tools/launch-desktop.cjs` 起一个 node 静态服务，
+ * 于是快捷方式目标是 `cmd /c "... npm run desktop:local"`，**任务栏常驻一个
+ * 「npm run desktop」的控制台黑框图标**——用户要求「只留系统托盘图标」。
+ * 现在把 dist 静态服务直接搬进 Electron 主进程：快捷方式可以指向
+ * `electron.exe .`（GUI 子系统程序，**不弹控制台、不占任务栏**），一步到位。
+ *
+ * 启用条件：未打包 **且** 没有外部 VITE_DEV_SERVER_URL（即没有别的静态服务
+ * 在管这件事）⇒ 自动启用。所以「双击 electron.exe .」和
+ * 「npm run desktop:hidden」都能直接跑，不依赖任何环境变量或额外包装脚本。
+ * 口径与 tools/launch-desktop.cjs 一致：同样的 MIME 表、同样的目录逃逸防护
+ * （解析后必须仍在 dist 内）、同样只读。若已设 VITE_DEV_SERVER_URL
+ * （Vite dev / launch-desktop.cjs 老路），行为与之前完全一致，零影响。
+ * ------------------------------------------------------------------------ */
+const EMBED_STATIC = !app.isPackaged && !process.env.VITE_DEV_SERVER_URL;
+const STATIC_PORT = Number(process.env.POND_DESKTOP_PORT || 4173);
+const STATIC_MIME = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
+  '.svg': 'image/svg+xml', '.json': 'application/json', '.woff2': 'font/woff2', '.ico': 'image/x-icon',
+  '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4', '.wav': 'audio/wav',
+};
+function startEmbeddedStatic() {
+  const ROOT = path.join(__dirname, '..', 'dist');
+  if (!fs.existsSync(path.join(ROOT, 'index.html'))) {
+    throw new Error('dist/index.html 不存在，先跑 npm run build');
+  }
+  const server = http.createServer((req, res) => {
+    const pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    const file = path.resolve(ROOT, `.${pathname === '/' ? '/index.html' : pathname}`);
+    if (!file.startsWith(ROOT) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+      res.writeHead(404); return res.end('not found');
+    }
+    res.writeHead(200, { 'Content-Type': STATIC_MIME[path.extname(file)] || 'application/octet-stream' });
+    fs.createReadStream(file).pipe(res);
+  });
+  return new Promise((resolve) => {
+    server.on('error', (error) => {
+      console.error(error.code === 'EADDRINUSE'
+        ? `端口 ${STATIC_PORT} 已被占用 —— 换一个：POND_DESKTOP_PORT=4180`
+        : `内置静态服务启动失败：${error.message}`);
+      app.quit();
+    });
+    server.listen(STATIC_PORT, '127.0.0.1', () => {
+      entryURL = `http://127.0.0.1:${STATIC_PORT}/`;
+      console.log(`内置静态服务 ${entryURL}（dist）`);
+      resolve();
+    });
+  });
 }
 
 function currentState() {
@@ -370,6 +422,10 @@ function createWindow() {
     // macOS 用 hiddenInset —— 保留红绿灯；Windows/Linux 用 frame:false。
     // ⚠️ 不要给 macOS 也设 frame:false，那会把红绿灯一并去掉。
     // Windows 侧 thickFrame 保持默认 true：窗口仍有阴影、仍能拖边缘调整大小。
+    // ★ skipTaskbar：窗口不占任务栏按钮，只保留系统托盘图标（用户要求）。
+    //   隐藏后靠托盘「打开风景控制台」/ 双击托盘把窗口唤回，不会丢窗口。
+    //   只对 Windows/Linux 生效，macOS 保持原有 Dock 行为不变。
+    ...(isMac ? {} : {}),
     ...(isMac
       ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 18, y: 20 } }
       : { frame: false, thickFrame: true }),
@@ -407,7 +463,10 @@ function createWindow() {
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', showControls);
-  app.whenReady().then(() => {
+  // 若启用内置静态服务，先把 dist 伺服起来（entryURL 会在 listen 回调里改写），
+  // 再建窗口 —— 否则窗口会先用 file:// 加载再被拒。
+  const ready = EMBED_STATIC ? app.whenReady().then(startEmbeddedStatic) : app.whenReady();
+  ready.then(() => {
     // macOS 走 Cocoa 窗口层级，Windows 走 Progman/WorkerW，两者共用同一份 pond-window.node 接口。
     // ⚠️ 原来这里只有 isMac 分支，Windows 上编出模块也不会被加载。
     if (isMac || process.platform === 'win32') {
