@@ -23,7 +23,7 @@
  *   第一版用「**像素差 > 2 灰阶的占比**」当"跳变"的度量，结果 ④ 报 max **89.9%**、
  *   ③ 报夜间平台 **87.0%** —— 看着像画面在疯狂闪，实际一帧都没闪。
  *   根因：**夜罩是全屏 `fillRect(rgba(7,25,39, 0.22*dim))`**。dim 从 1 走到 .844
- *   （半个���时的真实变化）就让**全屏每个像素**各暗 2 个灰阶 ⇒ 90% 的像素"变了"。
+ *   （半个小时的真实变化）就让**全屏每个像素**各暗 2 个灰阶 ⇒ 90% 的像素"变了"。
  *   而这个变化人眼读出来就是"天慢慢亮"，**根本不是跳变**。
  *   ⇒ 「像素差占比」量的是**空间覆盖**，不是**感知跳变**。
  *   ★ 教训与记忆里第 8 条同源：**阈值/指标必须在"被测对象真正变化的维度"上选**。
@@ -165,7 +165,7 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
   });
   ok(envReady, '★ 真实 dayLightAt / getDayPhase 已从 /src/lib/environment.js 装入', `dev server ${URL}`);
 
-  const hasEngine = await page.evaluate(() => {
+  const hasEngine = await page.evaluate(async () => {
     const e = window.__pondEngine;
     if (!e) return false;
     // 冻结：暂停 rAF、清鱼、锁死所有随机源与独立时钟。
@@ -182,18 +182,26 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
     });
     // 乌龟位置钉住：turtleCount=1，它的 alpha 是昼夜插值的一处真实通道。
     e.sim.turtles.forEach((t, i) => { t.x = e.width * 0.32; t.y = e.height * 0.62; t.angle = 0.6 + i; });
-    // ★★ **预热**：必须连续渲染多帧再返回，否则画面还没进稳态。
-    //   踩了两次坑才写对，过程值得留着：
-    //   ① 第一版只`e.render()` 一次 ⇒ 00:00 档亮度 99.09、01:00 之后恒为 99.10，
-    //      跨零自比差 0.0961%，而那两档 dayLight **完全相同**（都是 0）
-    //      ⇒ 差异不来自昼夜逻辑，来自"首帧 ≠ 稳态帧"。
-    //   ② 改成 3 帧后正跑归零，但反证跑又冒出同样的 0.0961%（984 像素，
-    //      集中在 x1019–1161 / y32–85 的一小块 = 萤火虫那片区域）。
-    //      ⇒ **帧数不是确定量，等几帧都不能保证稳态**。
-    //   正解：预热到「连续两帧的像素差为 0」为止（下面那个循环），
-    //   判据自身不假设"几帧够了"。
+    // ★★★★ **收敛不等于稳定 —— 还要先把 resize 等完**（这条花了三轮才找到）。
+    //   症状：只有 **00:30 一档**的像素差是 0.0961%（984 像素，固定在
+    //   x1019–1161 / y32–85），别的 48 档全0；换个轮次又可能消失。
+    //   根因：`pond.js:140` 的 **`new ResizeObserver(() => this.resize())` 是异步的**。
+    //   `page.reload()` 之后 React 把 HUD 渲染完才触发 resize，而预热跑在
+    //   那之前 ⇒ **第0 档截在 resize 前、第 1 档截在 resize 后**，
+    //   两帧的画布尺寸不同 ⇒ 那一块区域整片错位。
+    //   ⇒ 光"渲染到不动点"抓不到它，因为 resize 之后画面又变了一次。
+    //
+    //   正解：**先强制 resize 并等它落定，再开始收敛**。
+    //   而且这件事必须做在**冻结之前** —— 尺寸变了，`motes` 钉好的归一化坐标
+    //   与 `ctx` 的 dpr 变换都要重新对齐。
+    e.resize();
+    window.dispatchEvent(new Event('resize'));
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+    // ★★ 渲染到不动点：不是"渲染够几帧"，而是"连续两帧像素完全相同"。
     //   这与记忆里「光钉 random 不够，要连状态一起钉」同源：
     //   **冻结 = 让画面收敛到不动点，而不是让第一帧恰好等于稳态。**
+    //   ⚠️ 收敛循环只能抓"渲染造成的变化"，抓不到 resize —— 见上面那条。
     e.landscape.lastDraw = null;
     let warm = 0, stable = -1;
     const c2 = e.ctx, W = e.width, H = e.height;
@@ -248,6 +256,9 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
         return { dl, night, phase, settle };
       }, { hh: s.hh, mm: s.mm, useBool });
       maxSettle = Math.max(maxSettle, info.settle);
+      // ★ 每档之间也让两个 rAF 过去：ResizeObserver 是异步的，
+      //   截完上一档到截这一档之间，HUD/字体度量可能改变画布尺寸。
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
       await page.waitForTimeout(60);
       const f = join(OUT, `${tag}-${String(s.i).padStart(2, '0')}.png`);
       await page.locator('canvas.pond-canvas').screenshot({ path: f });
