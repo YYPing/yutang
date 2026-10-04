@@ -109,7 +109,27 @@ async function cleanup() {
     const errors = [];
     page.on('pageerror', (e) => errors.push(String(e)));
     page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
-    await page.waitForTimeout(2000);   // 等首帧 + 生态 tick
+    // ★★ 补一层**页面内**的错误记录（2026-10-04）。
+    //   上面这两个监听是 CDP 挂上之后才生效的，而 React 挂载失败发生在 load 瞬间，
+    //   那时监听还没挂上⇒ ④ 会报"0 条"却同时 ⑤⑥ 全红（自相矛盾）。
+    //   `addInitScript` 在**任何页面脚本之前**执行，让 window.onerror 先落地。
+    await page.addInitScript(() => {
+      window.__earlyErrors = [];
+      window.addEventListener('error', (e) => {
+        window.__earlyErrors.push('window.onerror: ' + (e.error?.stack || e.message));
+      });
+      window.addEventListener('unhandledrejection', (e) => {
+        window.__earlyErrors.push('unhandledrejection: ' + (e.reason?.stack || e.reason));
+      });
+      const ce = console.error.bind(console);
+      console.error = (...a) => {
+        window.__earlyErrors.push('console.error: ' + a.map((x) => x?.stack || String(x)).join(' '));
+        ce(...a);
+      };
+    });
+    // 触发一次导航，让 init script 生效（Electron 已加载的页面不会自动重跑）
+    await page.reload({ waitUntil: 'load' }).catch(() => {});
+    await page.waitForTimeout(2500);   // 等首帧 + 生态 tick
 
     const title = await page.title();
     check('③ 窗口标题', title === '浮生 · 摸鱼桌面', title);
@@ -117,10 +137,32 @@ async function cleanup() {
     const dom = await page.evaluate(() => ({
       canvas: document.querySelectorAll('canvas').length,
       rootKids: document.getElementById('root')?.childElementCount ?? -1,
+      early: window.__earlyErrors || [],
     }));
-    check('④ 无页面异常', errors.length === 0, errors.length ? errors.slice(0, 3).join(' | ') : '0 条');
+    // 页面内记录的异常也算数 —— 否则"白屏但 0 异常"这种自相矛盾会一直误导排查
+    const allErrors = [...errors, ...dom.early.map((e) => 'early: ' + e)];
+    check('④ 无页面异常', allErrors.length === 0, allErrors.length ? allErrors.slice(0, 3).join(' | ') : '0 条');
     check('⑤ canvas 在位', dom.canvas > 0, `${dom.canvas} 个`);
     check('⑥ root 有子节点（防 TDZ 白屏）', dom.rootKids > 0, `${dom.rootKids} 个子节点`);
+
+    // ★★ 2026-10-04：⑤⑥ 红但④绿时，**不要**就此下"静默失败"的结论。
+    //   `pageerror`/`console` 监听是在断言前挂的，而 React 挂载失败往往发生在
+    //   **页面 load 那一瞬间** —— 等监听挂上时异常已抛完 ⇒ ④报"0 条"是假绿。
+    //   实测踩过：4173 端口上 5/8（canvas=0、rootKids=0、④却"0 条异常"），
+    //   而同一份 dist 在 4182 端口上完全正常（canvas=2、rootKids=1、0 异常）——
+    //   真因是**残留 Electron 实例抢同一个静态端口**，不是代码问题。
+    //   所以这里在失败时补打body 真实 HTML，让下一次同类失败能一眼定性。
+    if (dom.canvas === 0 || dom.rootKids <= 0) {
+      const html = await page.evaluate(() => ({
+        body: document.body.innerHTML.slice(0, 300),
+        scripts: [...document.querySelectorAll('script[src]')].map((s) => s.src),
+      }));
+      console.log(`\n⚠ ⑤/⑥ 失败 ⇒ 补取证（怀疑是端口被占 / 旧实例残留，而非代码）：`);
+      console.log(`   已加载脚本：${html.scripts.join(', ') || '（无 —— bundle 都没进来）'}`);
+      console.log(`   body 前 300 字：${html.body || '（空）'}`);
+      console.log(`   若是端口问题：换端口重跑POND_DESKTOP_PORT=4180 POND_CDP_PORT=9225 node tools/check-desktop-boot.cjs`);
+      console.log(`   若仍失败：跑 npm run probe:desktop 抓完整异常栈。\n`);
+    }
     // 页面断言跑完就断，不 close
 
     // 5) 窗口位图 + 无边框几何（进程外抓，拿到客户区/非客户区）

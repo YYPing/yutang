@@ -267,6 +267,11 @@ export class PondEngine extends KoiRenderer {
     //   （`blendTerm` 按黄经连续插值），而 `updateOptions` 只在 options 引用变化时触发。
     //   放这里保证「节气渐变」是逐帧连续的，而不是每换一次档才跳一下。
     this.termVisual = visualFor(this.options);
+    // ★ 落叶存量跟着节气档案走（2026-10-04 接入 `litterCount`）。
+    //   为什么不在 `updateOptions` 里做：那里只跑一次，而档案在渐变模式下每帧都在变
+    //   ⇒ 交节后落叶数会停在旧值（用户可见：冬至还在飘 3 片秋叶）。
+    //   这里每帧同步，代价只是一个整数比较。
+    this.atmosphere.syncLitter(this.termVisual.litterCount);
     // ★ 把渲染参数也放进传给 landscape 的那份 options —— shader 要读它做水色。
     //   不能直接改 this.options：那会让 useMemo 的引用比对失效、也可能被存档逻辑看到。
     this.landscape.render(this.sim.time, { ...this.options, termVisual: this.termVisual }, this.sim.hand);
@@ -730,7 +735,56 @@ export class PondEngine extends KoiRenderer {
       ellipse(ctx, x, i % 2 ? bankY : height - bankY, 0.65 + mote.size * 0.42, 0.5 + mote.size * 0.3, 'rgba(241,251,245,.56)');
     }
     ctx.globalAlpha = 1;
+    this.drawFrost();
     this.drawIceHole(t);
+    ctx.restore();
+  }
+
+  /**
+   * 岸边浮霜 —— `frost` 通道的消费者（2026-10-04 接入）。
+   *
+   * ★ 为什么要独立于 `snow`：`frost`（霜）与 `ice`（冰）是**两件事**。
+   *   档案里霜降 frost=.8 而 ice=.15 —— 正对应"早上有一层白霜，池子还没上冻"。
+   *   如果只按 `snow` 画，霜降与立冬在画面上就是同一档；而霜降本该是**最早的秋末信号**。
+   *
+   * ⚠️ 判据必须挂在 `frost` 上，不能从 `ice` 推 —— `ice` 在大雪/冬至/小寒/大寒
+   *   全是 1（四档饱和），从它推出来的霜也会四档相同。这与 `iceHole` 踩的是同一个坑。
+   *
+   * ⚠️ 只在「薄冰」阶段画（ice < 0.55）：一旦封冰，霜已经被压在冰层下面了，
+   *   再画一层白霜等于把画面洗白 —— 那正是 iceHole 之前"薄冰上挖洞"的翻版错误。
+   */
+  drawFrost() {
+    const v = this.termVisual;
+    if (!(v.frost > 0.02) || v.ice >= 0.55) return;
+    const ctx = this.ctx;
+    const edge = Math.min(this.width, this.height) * 0.08;
+    ctx.save();
+    //霜带宽度比积雪窄（霜只挂在岸边一线），且随 frost 连续变化
+    const band = edge * (0.30 + 0.62 * v.frost);
+    const alpha = 0.10 + 0.24 * v.frost;
+    for (const [y0, dir] of [[0, 1], [this.height, -1]]) {
+      const g = ctx.createLinearGradient(0, y0, 0, y0 + dir * band);
+      g.addColorStop(0, `rgba(233,246,240,${alpha})`);
+      g.addColorStop(1, 'rgba(233,246,240,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, dir > 0 ? y0 : y0 - band, this.width, band);
+    }
+    // 霜晶：沿岸边一线的短白划痕，密度与长度都随 frost 走（确定性，用 motes 不引入随机源）
+    const n = Math.round(6 + 22 * v.frost);
+    for (let i = 0; i < n; i++) {
+      const mote = this.motes[(i * 7 + 3) % this.motes.length];
+      if (!mote) break;
+      const x = mote.x * this.width;
+      const atTop = i % 2 === 0;
+      const y = atTop ? 1 + mote.seed * band * 0.72 : this.height - (1 + mote.seed * band * 0.72);
+      const len = edge * (0.10 + 0.26 * v.frost) * (0.6 + mote.size);
+      ctx.strokeStyle = `rgba(244,251,247,${0.16 + 0.30 * v.frost})`;
+      ctx.lineWidth = 0.6;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + len, y + (atTop ? len * 0.22 : -len * 0.22));
+      ctx.stroke();
+    }
     ctx.restore();
   }
 

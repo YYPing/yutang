@@ -50,8 +50,38 @@ const VISUALS = SOLAR_TERMS.map((term) => ({
   season: TERM_SEASON[SOLAR_TERMS.indexOf(term)],
   // ⚠️ 必须传**档案对象**而不是节气名 —— `TERM_VISUAL` 收的是 `blendTerm()` 的结果，
   //   这是渐变接入的关键：插值发生在档案层，映射层只做线性翻译。
-  ...TERM_VISUAL(termProfile(term)),
+  // ★ 2026-10-04：第二个参数**必须传** `{solarTerm: term}`。
+  //   `TERM_VISUAL(profile, options)` 用它做季内**秩次**等距与季节查真源表；
+  //   不传就退回 warmth 线性兜底 ⇒ 步长不均（最弱对 ΔE 1.26）、且 7/24 档错季。
+  //   量具若不同步，量到的就是"引擎在真实运行时不会走的路径"，判据全错。
+  ...TERM_VISUAL(termProfile(term), { solarTerm: term }),
 }));
+
+/** 物候顺序（秩次表）—— 必须与 `term-visual.js` 的 TERM_RANK 同源。
+ *  ⚠️ 不能用 `SOLAR_TERMS.filter(TERM_SEASON===s)` 取"某季六档"：
+ *    24 序跨年排布，筛出来是「谷雨→立夏」这种跨季拼接，季内断言会全假红。 */
+const RANK = {
+  spring: ['立春', '雨水', '惊蛰', '春分', '清明', '谷雨'],
+  summer: ['立夏', '小满', '芒种', '夏至', '小暑', '大暑'],
+  autumn: ['立秋', '处暑', '白露', '秋分', '寒露', '霜降'],
+  winter: ['立冬', '小雪', '大雪', '冬至', '小寒', '大寒'],
+};
+const vis = (t) => VISUALS.find((v) => v.term === t);
+
+section('⓪ 季节归属与秩次（2026-10-04 新增）');
+{
+  const wrong = VISUALS.filter((v) => v.season !== TERM_SEASON[SOLAR_TERMS.indexOf(v.term)]);
+  ok(wrong.length === 0, '24 档季节与 TERM_SEASON 一致（不错季）',
+    wrong.map((v) => `${v.term}=${v.season}`).join(' '));
+  // 季内步长必须恒定（秩次等距的判据）
+  for (const [sname, list] of Object.entries(RANK)) {
+    const t = list.map((x) => VISUALS.find((v) => v.term === x).tintR);
+    const steps = t.slice(1).map((x, i) => Math.abs(x - t[i]));
+    const spread = Math.max(...steps) - Math.min(...steps);
+    ok(spread < 1e-6, `${sname} 季内 tintR 步长恒定（秩次等距）`,
+      `步长 ${steps.map((x) => x.toFixed(3)).join('/')}`);
+  }
+}
 
 section('① 六维全部被渲染层消费');
 {
@@ -71,13 +101,35 @@ section('② 水色冷暖覆盖');
   const warmths = VISUALS.map((v) => v.warmth);
   const span = Math.max(...warmths) - Math.min(...warmths);
   ok(span >= 0.34, 'warmth 极差 ≥ 0.34（24 档冷暖分明）', `实测 span=${n2(span)}`);
-  // ★ 阳性对照：暖的档必须真的偏黄，冷的档必须真的偏青 —— 不能只是"数值变了"
-  const summer = TERM_VISUAL(termProfile('大暑')), winter = TERM_VISUAL(termProfile('冬至'));
-  ok(summer.tintR > summer.tintB, '大暑偏暖（R > B）', `R=${n2(summer.tintR)} B=${n2(summer.tintB)}`);
-  ok(winter.tintB > winter.tintR, '冬至偏冷（B > R）', `R=${n2(winter.tintR)} B=${n2(winter.tintB)}`);
-  // 中间档必须落在两端之间（不能是"两极 + 全是同一个中间值"）
-  const spring = TERM_VISUAL(termProfile('春分'));
-  ok(spring.tintR > winter.tintR && spring.tintR < summer.tintR, '春分居中', `R=${n2(spring.tintR)}`);
+  // ★ 阳性对照：染色必须真的沿冷→暖轴走，不能只是"数值变了"。
+  // ⚠️ 口径变更（2026-10-04，秩次等距之后）：**跨季 tint 不可比**。
+  //   秩次化让每一季都独立吃满 `COLD_TINT→WARM_TINT` 全幅（实测四季都是
+  //   R 0.300→0.550 / B 0.620→0.360，逐档完全重合），所以
+  //   ① 拿春分跟大暑比大小 = 拿两把不同的尺子量东西，恒失效；
+  //   ② 「大暑偏暖 / 冬至偏冷」之所以碰巧成立，只是因为它俩各自落在
+  //      夏季暖端 / 冬季偏冷位，不是绝对冷暖。
+  //   正确的口径是**季内相对位置**：每季都该真的从冷端走到暖端。
+  const REL = [
+    { first: '立春', last: '谷雨', name: 'spring' },
+    { first: '立夏', last: '大暑', name: 'summer' },
+    { first: '立秋', last: '霜降', name: 'autumn' },
+    { first: '立冬', last: '大寒', name: 'winter' },
+  ];
+  for (const { first, last, name } of REL) {
+    const a = vis(first), b = vis(last);
+    if (!a || !b) { ok(false, `${name} 季内冷暖轴（${first}→${last}）`, 'VISUALS 里缺这一档'); continue; }
+    // 冷端：B > R（青）；暖端：R > B（黄）。中间档必须两端符号相反。
+    ok(a.tintB > a.tintR && b.tintR > b.tintB,
+      `${name} 季内真的从冷端走到暖端（${first} 青 → ${last} 黄）`,
+      `${first} R=${n2(a.tintR)}/B=${n2(a.tintB)} · ${last} R=${n2(b.tintR)}/B=${n2(b.tintB)}`);
+  }
+  // 反向对照：冷暖轴不能塌成一个方向（四季都只偏黄 / 都只偏青）。
+  const midSigns = REL.map(({ first, last }) => {
+    const a = vis(first), b = vis(last);
+    return Math.sign(b.tintR - b.tintB) - Math.sign(a.tintR - a.tintB);
+  });
+  ok(midSigns.every((d) => d === 2), '四季的冷暖轴方向一致（R−B 由负翻正）',
+    `四季符号差 ${midSigns.join('/')}（-1→+1 才是翻正，+2）`);
 }
 
 section('③ 焦散强度随节气连续变化');
@@ -123,8 +175,10 @@ section('④⑤ 浮叶与落叶密度有高低差');
 section('⑥ 结冰程度：夏不封、冬封');
 {
   const ice = VISUALS.map((v) => v.ice);
-  const summer = TERM_VISUAL(termProfile('大暑')), midsummer = TERM_VISUAL(termProfile('夏至'));
-  const winter = TERM_VISUAL(termProfile('冬至')), deep = TERM_VISUAL(termProfile('大雪'));
+  // ⚠️ 必须传 `{solarTerm}`（同⑨ 段的理由）：不传就量的是 warmth 线性兜底路径。
+  const V = (t) => TERM_VISUAL(termProfile(t), { solarTerm: t });
+  const summer = V('大暑'), midsummer = V('夏至');
+  const winter = V('冬至'), deep = V('大雪');
   ok(summer.ice <= 0.02, '大暑不结冰', `ice=${n2(summer.ice)}`);
   ok(midsummer.ice <= 0.02, '夏至不结冰', `ice=${n2(midsummer.ice)}`);
   ok(winter.ice >= 0.95, '冬至全封', `ice=${n2(winter.ice)}`);
@@ -224,12 +278,19 @@ section('⑨ 渐变插值在渲染参数上也连续');
   //   `blendTerm` 在档案层插值 ⇒ `TERM_VISUAL` 必须对插值结果**连续**。
   //   判据：任意两相邻档，在 t=0.5 处的渲染参数必须**严格落在**两端之间，
   //   且**不等于**任一端（落在端点上说明被取整/二值化了）。
+  //
+  // ⚠️ 三处都必须传 `{solarTerm: from}` —— 这不是可选参数。
+  //   真实路径是 `blendTerm(almanac.term, t)`（`useEnvironment.js`），
+  //   `solarTerm` 恒为离散的"from 档"、`t` 是档内进度。秩次化之后，
+  //   `solarTerm` 决定了"走哪一段"，不传就退回 warmth 线性兜底，
+  //   而处暑(.76→判 summer) 与 白露(.66→判 spring) 落在**两个季节带**上，
+  //   插值自然跑到两端区间之外 —— 那不是实现错，是量具量错了路径。
   const flat = [];
   for (let i = 0; i < 24; i++) {
     const from = SOLAR_TERMS[i], to = nextTerm(from);
-    const a = TERM_VISUAL(termProfile(from));
-    const b = TERM_VISUAL(termProfile(to));
-    const mid = TERM_VISUAL(blendTerm(from, 0.5));
+    const a = TERM_VISUAL(termProfile(from), { solarTerm: from });
+    const b = TERM_VISUAL(termProfile(to), { solarTerm: to });
+    const mid = TERM_VISUAL(blendTerm(from, 0.5), { solarTerm: from });
     for (const key of ['tintR', 'tintG', 'tintB', 'causticInk', 'ice', 'frost']) {
       const lo = Math.min(a[key], b[key]), hi = Math.max(a[key], b[key]);
       if (hi - lo < 1e-6) continue;                // 该通道两端本就相同，跳过
@@ -243,9 +304,28 @@ section('⑨ 渐变插值在渲染参数上也连续');
   // ★ 反向对照：单检查 t=.5 会被"线性映射 + 恰好过中点"骗过，
   //   所以再验「t 越小越靠近 from」这个单调性。
   const from = '霜降', to = '立冬';
-  const seq = [0, 0.25, 0.5, 0.75, 1].map((t) => TERM_VISUAL(blendTerm(from, t)).ice);
+  const seq = [0, 0.25, 0.5, 0.75, 1].map((t) => TERM_VISUAL(blendTerm(from, t), { solarTerm: from }).ice);
   const mono = seq.every((v, i) => i === 0 || v >= seq[i - 1] - 1e-9);
   ok(mono, 't 从 0 到 1 时渲染参数单调（0→.25→.5→.75→1）', seq.map(n2).join(' → '));
+
+  // ★★★ 2026-10-04 新增：抓「档内 15 天的水色必须是渐变，而不是阶梯」。
+  //   这条判据是被上一条**逼出来的**：只查 t=.5 时，t∈(0,.5) 整段恒定也查不出来
+  //   （中点仍是合法值）。必须扫全段，且要求**步长均匀**——
+  //   "恒定"和"跳一下"两种病都会在这里露出来。
+  const STEP = 6;                                  // 每段取 7 个采样点
+  const stiff = [], uneven = [];
+  for (const term of SOLAR_TERMS) {
+    const seq2 = Array.from({ length: STEP + 1 }, (_, k) =>
+      TERM_VISUAL(blendTerm(term, k / STEP), { solarTerm: term }).tintR);
+    const steps = seq2.slice(1).map((v, i) => Math.abs(v - seq2[i]));
+    const lo = Math.min(...steps), hi = Math.max(...steps);
+    if (hi < 1e-6) stiff.push(`${term}(全段恒定 ${n2(seq2[0])})`);
+    else if (hi / lo > 1.35) uneven.push(`${term}(步长 ${steps.map((x) => x.toFixed(3)).join('/')})`);
+  }
+  ok(stiff.length === 0, '档内 15 天水色是渐变（没有整段恒定的阶梯）',
+    stiff.length ? stiff.slice(0, 3).join(' ') : '');
+  ok(uneven.length === 0, '档内步长均匀（最大/最小步长 ≤ 1.35）',
+    uneven.length ? uneven.slice(0, 3).join(' ') : '');
 }
 
 console.log(`\n通过 ${pass} 项，未通过 ${fail} 项`);

@@ -8,6 +8,10 @@ uniform float uCausticInk;uniform float uCausticScale;uniform float uCausticWarp
 /* F-24 per-term tint: lets 24 solar terms differ even though there are
    only 4 background images; the tint applies over water only. */
 uniform vec3 uTermTint;uniform float uTermTintAmt;
+/* F-24b structured tint: a second weight that lets the term colour vary
+   ACROSS the surface instead of uniformly. 0 = flat (old behaviour),
+   1 = full spatial structure. */
+uniform float uTermPattern;
 varying vec2 vUv;
 float oval(vec2 p,vec2 c,vec2 s){return 1.-smoothstep(.55,1.,length((p-c)/s));}
 /* Water-surface caustic net (F-10.5 companion).
@@ -59,8 +63,30 @@ void main(){
     ⚠️ This block lives inside a JS template string: no backticks, no // comments. */
  if(uTermTintAmt>0.){
   /* Push the water toward the term's tint while keeping some of the original
-     hue: a full replacement would look like a colour filter over a photo. */
-  vec3 tinted=mix(color,color*uTermTint,water*uTermTintAmt);
+     hue: a full replacement would look like a colour filter over a photo.
+     ------------------------------------------------------------------
+     F-24b: the tint amount is no longer flat over the whole pond. 'pattern'
+     modulates it with a **spatially varying** weight built from two terms that
+     are already in this shader:
+       · shallow - distance-to-centre falloff (1 near the banks)
+       · caustic - the animated light net (its own structure)
+     A flat tint reads as "the light changed", which the eye discards (measured
+     岸边/池心 ratio 0.58: darker banks make multiplicative tint land on the
+     water regardless of any weight). Spatially varying, the same tint is read
+     as "the pond itself changed". 'uTermPattern' 0 keeps the old flat look so
+     the change is reversible by one uniform. */
+  float spatial=1.;
+  if(uTermPattern>0.){
+   /* Two-scale structure. Measured 2026-10-04: the FIRST version used
+      broad=mix(.55,1.25,...) whose mean is 1.0, so multiplying it in made the
+      overall tint slightly WEAKER (measured dE 3.28 -> 3.04) and also cancelled
+      out part of the term difference. Now the pattern only ever *adds*
+      (spatial >= 1), so it can lift the banks without dulling the centre. */
+   float broad=1.+uTermPattern*.42*smoothstep(.02,.30,length(uv-vec2(.5)));
+   float fine=1.+uTermPattern*.38*(causticNet(uv*uCausticScale,uTime)-.42);
+   spatial=min(broad*fine,1.75);
+  }
+  vec3 tinted=mix(color,color*uTermTint,clamp(water*uTermTintAmt*spatial,0.,1.));
   color=tinted;
  }
  if(uCausticInk>0.){
@@ -95,7 +121,7 @@ export class Landscape{
   const vs=shader(gl.VERTEX_SHADER,vertex),fs=shader(gl.FRAGMENT_SHADER,fragment),p=gl.createProgram();gl.attachShader(p,vs);gl.attachShader(p,fs);gl.linkProgram(p);gl.deleteShader(vs);gl.deleteShader(fs);if(!gl.getProgramParameter(p,gl.LINK_STATUS)){gl.deleteProgram(p);throw Error('Landscape program unavailable')}
   this.program=p;gl.useProgram(p);this.buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,this.buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
   const pos=gl.getAttribLocation(p,'aPosition');gl.enableVertexAttribArray(pos);gl.vertexAttribPointer(pos,2,gl.FLOAT,false,0,0);
-  this.uniforms=Object.fromEntries(['uImage','uCover','uSize','uTexel','uPointer','uTime','uWind','uMotion','uClarity','uCausticInk','uCausticScale','uCausticWarp','uCausticWarpSpeed','uCausticDrift','uCausticSharp','uCausticGate','uCausticShallow','uTermTint','uTermTintAmt'].map(n=>[n,gl.getUniformLocation(p,n)]));gl.uniform1i(this.uniforms.uImage,0);
+  this.uniforms=Object.fromEntries(['uImage','uCover','uSize','uTexel','uPointer','uTime','uWind','uMotion','uClarity','uCausticInk','uCausticScale','uCausticWarp','uCausticWarpSpeed','uCausticDrift','uCausticSharp','uCausticGate','uCausticShallow','uTermTint','uTermTintAmt','uTermPattern'].map(n=>[n,gl.getUniformLocation(p,n)]));gl.uniform1i(this.uniforms.uImage,0);
   const viewport=gl.getParameter(gl.MAX_VIEWPORT_DIMS);
   this.maxSurfaceSize=Math.min(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE),viewport[0],viewport[1]);
   this.lastDraw=null;this.ready=true;
@@ -189,14 +215,18 @@ export class Landscape{
    //   下界不能更低：再低就偏离"水色仍是水"读起来像滤镜（上界已经是 1.0，不能再高）。
    //   ★ 记一条：**把一个量映射到 [0,1] 时，基址/跨度必须由「实际取值域」反推，
    //     不能拍脑袋选个"看起来温和"的下界** —— 温和的下界等于温和的差异。
-   // ⚠️ 基址 = 「最暗端落在哪」，它**直接决定摆幅**。
-   //   .86 ⇒ tint 的全部定义域只映射到 .86~1.00 = 0.14 宽 ⇒ 相邻档水色差仅 0.5~0.9 灰阶
-   //   （实测 夏至→小暑 0.62、惊蛰→春分 0.71）—— 肉眼根本读不出，等于白给。
-   //   .70 ⇒ 摆幅 0.30，是 .86 的 2.1 倍 ⇒ 同样的档案差能到 1.3~1.9 灰阶。
-   //   下界不能更低：再低就偏离"水色仍是水"读起来像滤镜（上界已经是 1.0，不能再高）。
-   //   ★ 记一条：**把一个量映射到 [0,1] 时，基址/跨度必须由「实际取值域」反推，
-   //     不能拍脑袋选个"看起来温和"的下界** —— 温和的下界等于温和的差异。
-   const TINT_BASE = [0.70, 0.78, 0.66];   // 三通道各自的"最暗端"下界
+   /* ★★ 2026-10-04 实测重标定：.70/.78/.66 → .50/.60/.46。
+      判据不是"好看"，而是两个可量化的数（扫了5 组基址，取平衡点）：
+        基址                    全幅摆幅  两端ΔE   水面亮度降  饱和度涨
+        [.70,.78,.66]（旧）      0.075    20.8      4.5%      2.3%
+        [.60,.68,.56]           0.100    28.7      6.4%      2.9%
+        [.50,.60,.46]（★采用）  0.125    35.7      8.0%      3.7%   ← ΔE +72%
+        [.40,.50,.36]           0.150    43.8      9.9%      4.3%   ← 收益递减且开始伤画面
+        [.30,.40,.26]           0.175    51.8     11.8%      5.0%   ← 明显像滤镜
+      人眼同屏辨识阈约 ΔE 5；相邻档只吃到全幅的 1/5，所以**两端 ΔE 必须够大**。
+      亮度降 8% / 饱和涨 3.7% 仍在"仍是水"的范围内。
+   */
+   const TINT_BASE = [0.50, 0.60, 0.46];   // 三通道各自的"最暗端"下界
    gl.uniform3f(u.uTermTint,
      TINT_BASE[0] + v.tintR * (1 - TINT_BASE[0]),
      TINT_BASE[1] + v.tintG * (1 - TINT_BASE[1]),
@@ -206,7 +236,26 @@ export class Landscape{
       ★ 下界抬到 .28：旧值 `|warmth-.55|*2.1` 在春分(0.42) 只有 .063，
       *   春分与惊蛰的水色差被压到几乎为零 ⇒ 这两档看着一样。
       *   .28 让最"中性"的档位也有可见的水色，档间差不再被 amt 二次压扁。 */
-   gl.uniform1f(u.uTermTintAmt,0.28+Math.min(1,Math.abs(v.warmth-0.55)*2.1)*0.72);
+   /* uTermTintAmt：**不再**按 |warmth-.55| 二次调制。
+      ⚠️ 旧公式 `0.28+|warmth-.55|*2.1×.72` 是个**纯衰减器**，不携带任何新信息：
+        它把"最中性的那一档"（春分 warmth .58）压到 0.28 —— 而春分恰恰是
+        六个春季节气之一。实测它的代价：同季感知 ΔE 只有 1.19。
+        而 tint 的定义域已经在 term-visual.js 里**按季归一化**过了
+        （seasonalWarmth，保证六档吃满全幅），这里再压一次就是自我抵消。
+      现在是常量 0.86：留一点余量给"仍是水"（1.0 会像纯色滤镜），
+      其余全部交给 tint 的定义域去表达档间差。 */
+   gl.uniform1f(u.uTermTintAmt,options.termTintAmt??0.86);
+
+   /* F-24b 结构化染色：让水色在**画面上有空间变化**，而不是一刀切。
+      实测依据（2026-10-04）：均匀染色的人眼可辨度极低 ——
+      ① 乘性染色天生落在池心：岸边原色暗、池心原色亮，
+         岸边/池心 差异比恒为 **0.58**，与染色强度无关（amt 0.25→0.85 全程不变）；
+      ② 加任何空间权重也改不了它（扫 ring 0.6~6.0，比值一路降到 0.24）。
+      真正能拉开人眼感知的是**色相跨度**：实测 ΔL 3.0（现状）→ 16.4（拉大后），
+         远超辨识阈 5。
+      所以两件事一起做：a) 扩大 tint 的实际摆幅（见 TINT_BASE 注释）；
+         b) 用空间权重调制，让染色在画面上**有结构**而不是一块均匀滤镜。 */
+   gl.uniform1f(u.uTermPattern,options.termPattern??0.85);
   }else if(u.uTermTint){
    gl.uniform3f(u.uTermTint,1,1,1);gl.uniform1f(u.uTermTintAmt,0);
   }
