@@ -76,8 +76,13 @@ export class TurtleRenderer{
   oval(f,-6,13,3,6,'rgba(223,237,186,.22)',.4);
   this.shadow=document.createElement('canvas');this.shadow.width=128;this.shadow.height=96;const s=this.shadow.getContext('2d');s.filter='blur(5px)';oval(s,64,48,36,29,'rgba(8,42,30,.55)');
  }
- draw(c,t,{night=false,shadow=false,scale=1}={}){
-  c.save();c.translate(t.x+(shadow?6:0),t.y+(shadow?9:0));c.rotate(t.heading);c.scale(t.length*scale/100,t.length*scale/100);c.globalAlpha=night?.75:.95;
+ /**
+  * ★ 昼夜连续化（2026-10-04）：`daylight` 0..1 连续插值；
+  *   `night` 布尔保留兼容（旧调用方/单测仍传它），端点逐位一致。
+  */
+ draw(c,t,{night=false,daylight,shadow=false,scale=1}={}){
+  const dl=Number.isFinite(daylight)?Math.max(0,Math.min(1,daylight)):(night?0:1);
+  c.save();c.translate(t.x+(shadow?6:0),t.y+(shadow?9:0));c.rotate(t.heading);c.scale(t.length*scale/100,t.length*scale/100);c.globalAlpha=.75+.20*dl;
   if(shadow){c.globalAlpha=.3;c.drawImage(this.shadow,-64,-48,128,96);c.restore();return}
   c.fillStyle='#89af87';c.beginPath();c.moveTo(-29,-4);c.quadraticCurveTo(-39,-3,-44,Math.sin(t.phase)*1.7);c.quadraticCurveTo(-38,4,-29,4);c.fill();
   for(const front of [true,false])for(const side of [-1,1]){

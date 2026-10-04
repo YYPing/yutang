@@ -1,4 +1,5 @@
 import {rainPosition} from './atmosphere.js';
+import {byDaylight} from './light-field.js';
 const TAU=Math.PI*2;
 /** Cache soft cloud edges once, instead of blurring the 4K canvas every frame. */
 export class Scenery{
@@ -28,7 +29,8 @@ export class Scenery{
  clouds(ctx,a,w,h,o){
   if(!['cloudy','rainy','stormy'].includes(o.weather))return;
   const t=o.reducedMotion?0:a.time,storm=o.weather==='stormy';
-  ctx.save();ctx.globalAlpha=o.night?.08:storm?.13:o.weather==='rainy'?.14:.28;
+  // ★ 昼夜连续化：云的遮光强度随昼夜插值（原来只有夜间 .08 一个值）
+  ctx.save();ctx.globalAlpha=storm?.13:o.weather==='rainy'?.14:byDaylight(.08,.28,o);
   for(let i=0;i<4;i++){
    const cw=Math.min(w*.6,740),ch=cw*.38;
    const x=((i*.31*w+t*(storm?8:4))%(w+cw))-cw*.6;
@@ -50,10 +52,11 @@ export class Scenery{
   // 落水环（雨滴 / 落叶）：★ 俯视图口径 ⇒ 画正圆，不纵向压扁、不旋转。
   // 与 pond.js 的 drawRipples / drawFeedCircles 同一套（量具 tools/check-water-rings.cjs）。
   rain(ctx,a,w,h,o){
-   ctx.save();ctx.strokeStyle=o.night?'rgba(224,242,239,.31)':'rgba(235,251,240,.5)';ctx.lineWidth=.85;ctx.beginPath();
+   // ★ 昼夜连续化：岸线颜色同色、只变强度（避免黎明"颜色跳变"）
+  ctx.save();ctx.strokeStyle=`rgba(230,247,240,${byDaylight(.31,.5,o)})`;ctx.lineWidth=.85;ctx.beginPath();
    for(const d of a.drops){const {x,y,slant}=rainPosition(d,w,h,o);ctx.moveTo(x+4*slant,y-12-d.seed*9);ctx.lineTo(x,y)}ctx.stroke();
    for(const r of a.impacts){const p=r.age/r.life,rad=2+p*(r.kind==='rain'?24:32);ctx.lineWidth=.8;
-    ctx.strokeStyle=`rgba(226,246,222,${(1-p)**1.5*(o.night?.33:.55)})`;ctx.beginPath();ctx.arc(r.x,r.y,rad,0,TAU);ctx.stroke();
+    ctx.strokeStyle=`rgba(228,247,228,${(1-p)**1.5*byDaylight(.33,.55,o)})`;ctx.beginPath();ctx.arc(r.x,r.y,rad,0,TAU);ctx.stroke();
     if(p>.17){ctx.strokeStyle=`rgba(224,246,225,${(1-p)**2*.3})`;ctx.beginPath();ctx.arc(r.x,r.y,rad*.65,0,TAU);ctx.stroke()}
     if(p<.12){ctx.fillStyle=`rgba(238,253,239,${(.12-p)*4})`;ctx.fillRect(r.x-1,r.y-3,1.4,3)}
    }

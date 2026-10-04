@@ -47,6 +47,46 @@ test('weather sound mixes change with season, use rain for rain, and remain with
 });
 
 /* ══════════════════════════════════════════════════════════════════
+ * 昼夜连续化（2026-10-04）：`ambientMix` 的第三参兼容 bool 与 dayLight
+ * ══════════════════════════════════════════════════════════════════ */
+test('★ ambientMix 端点与旧的布尔 night 逐位一致（重构不能改观感）',()=>{
+ // ⚠️ 这是本次重构最关键的不变式：手动模式（day=1/night=0）下音频配比
+ //   **必须与改动前完全相同**。否则"顺手改掉了用户显式选择的听感"，
+ //   而任何量具都测不出「改坏了」与「本来就这样」的区别。
+ for(const [season,weather] of [['summer','sunny'],['winter','rainy'],['autumn','cloudy'],['spring','stormy']]){
+  assert.deepEqual(ambientMix(weather,season,1),ambientMix(weather,season,false),
+    `${season}/${weather} 的白天端点变了`);
+  assert.deepEqual(ambientMix(weather,season,0),ambientMix(weather,season,true),
+    `${season}/${weather} 的夜间端点变了`);
+ }
+ // coastal 主题同样要逐位一致（它有独立的 ocean 通道）
+ assert.deepEqual(ambientMix('sunny','summer',1,'coast'),ambientMix('sunny','summer',false,'coast'));
+ assert.deepEqual(ambientMix('sunny','summer',0,'coast'),ambientMix('sunny','summer',true,'coast'));
+ // 夜间衰减就是旧的 .9（旧代码三个通道各 *.9）
+ const n=ambientMix('sunny','summer',0),d=ambientMix('sunny','summer',1);
+ assert.ok(Math.abs(n.stream-d.stream*.9)<1e-12,`夜间 stream 应为白天的 .9，实为 ${n.stream} vs ${d.stream*.9}`);
+});
+
+test('★ ambientMix 随 dayLight 连续过渡（黎明不会突然变小）',()=>{
+ // ⚠️ 方向：dayLight 增大 = 天更亮 = 声音**更响**（夜间衰减 .9 逐渐撤掉）。
+ //   第一版把单调性写反了（以为「越往后越轻」），报了个方向性假红。
+ // seq 按 dayLight **递增**排列 ⇒ 各通道权重必须**单调升**，且单步差有界。
+ const seq=Array.from({length:21},(_,i)=>ambientMix('sunny','summer',i/20));
+ for(let i=1;i<seq.length;i++){
+  for(const id of ['stream','wind','rain']){
+   assert.ok(seq[i][id]>=seq[i-1][id]-1e-9,
+     `dayLight=${(i/20).toFixed(2)} 的 ${id} 反而变小了：${seq[i-1][id]} -> ${seq[i][id]}`);
+   assert.ok(seq[i][id]-seq[i-1][id]<0.05,
+     `${id} 单步跳变过大：Δ=${(seq[i][id]-seq[i-1][id]).toFixed(4)}`);
+  }
+ }
+ // 中间值必须真的落在两端之间（不是只有 0/1 两个态）
+ const mid=ambientMix('sunny','summer',0.5);
+ assert.ok(mid.stream>seq[0].stream&&mid.stream<seq[20].stream,
+  `dayLight=.5 应介于两端，实为 ${mid.stream}（${seq[0].stream} ~ ${seq[20].stream}）`);
+});
+
+/* ══════════════════════════════════════════════════════════════════
  * 落叶数量由节气档案驱动（2026-10-04 接入 litterCount）
  *
  * ★ 这是「算了不画」的第四个马甲：term-visual.js 一直算得出 litterCount

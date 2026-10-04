@@ -1,4 +1,5 @@
 import {windStrength} from './atmosphere.js';
+import {byDaylight} from './light-field.js';
 const fract=x=>x-Math.floor(x);
 /** Small groups of traveling capillary waves, in the artwork's water coordinates. */
 export function surfaceRipples(time,width,height,options={}){
@@ -11,7 +12,7 @@ export function surfaceRipples(time,width,height,options={}){
   const x=((u-.5)/coverX+.5)*width+(phase-.5)*(22+wind*14),y=((v-.5)/coverY+.5)*height+(phase-.5)*12;
   if(x<-100||x>width+100||y<-40||y>height+40)continue;
   waves.push({x,y,length:45+seed*77,angle:-.2+seed*.3,spacing:5+seed*3,phase,
-   alpha:Math.sin(phase*Math.PI)**2*(options.night?.052:.1)*(1+wind*.28),curve:3+seed*5});
+   alpha:Math.sin(phase*Math.PI)**2*byDaylight(.052,.1,options)*(1+wind*.28),curve:3+seed*5});
  }
  return waves;
 }
@@ -62,7 +63,7 @@ export function shoreRipples(time,width,height,options={}){
     points.push({x:p.x-dy/len*d*bank.side,y:p.y+dx/len*d*bank.side});
    }
    if(points.every(p=>p.x<-30||p.x>width+30||p.y<-30||p.y>height+30))continue;
-   waves.push({points,alpha:Math.sin(phase*Math.PI)**2*(options.night?.09:.18)*(1+wind*.16)});
+   waves.push({points,alpha:Math.sin(phase*Math.PI)**2*byDaylight(.09,.18,options)*(1+wind*.16)});
   }
  }
  return waves;

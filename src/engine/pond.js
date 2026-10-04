@@ -9,7 +9,7 @@ import {prepareKoiSkin} from './koi-skin.js';
 import {TurtleRenderer} from './turtles.js';
 import {drawSurfaceRipples,drawShoreRipples} from './surface-waves.js';
 import { EGG_VISUAL } from './eco/constants.js';
-import { LightField, LIGHT } from './light-field.js';
+import { LightField, LIGHT, daylightOf, byDaylight } from './light-field.js';
 
 const TAU = Math.PI * 2;
 
@@ -287,10 +287,11 @@ export class PondEngine extends KoiRenderer {
     //   旧门控是"每个节气都一样"的根因之一：24 个节气里只有 6 个能看见荷叶。
     if (this.termVisual.leafCount > 0) this.drawLotus();
     const turtleScale = clamp(Math.min(this.width / 1250, this.height / 780), .78, 1.15);
-    for (const turtle of this.sim.turtles) this.turtleRenderer.draw(ctx, turtle, {scale:turtleScale,night:this.options.night,shadow:true});
+    // 乌龟 alpha 走dayLight 连续插值（turtles.js 里 `night?.75:.95` 改为接受 0..1）
+    for (const turtle of this.sim.turtles) this.turtleRenderer.draw(ctx, turtle, {scale:turtleScale,daylight:daylightOf(this.options),shadow:true});
     for (const fish of this.sim.fish) this.drawFish(fish, true);
     for (const fish of this.sim.fish) this.drawFish(fish, false);
-    for (const turtle of this.sim.turtles) this.turtleRenderer.draw(ctx, turtle, {scale:turtleScale,night:this.options.night});
+    for (const turtle of this.sim.turtles) this.turtleRenderer.draw(ctx, turtle, {scale:turtleScale,daylight:daylightOf(this.options)});
     // ★ 冰层门控从「季节是winter 就整层封」改成**按档案的 ice 值连续调**。
     //   旧门控是二值的：要么一整层冰、要么没有。而档案里霜降 ice=.15、立冬 .4、
     //   小雪 .7、大雪 1.0 —— 真实的结冰过程是渐进的（先岸边薄霜、再连片）。
@@ -312,20 +313,30 @@ export class PondEngine extends KoiRenderer {
   drawWater() {
     const ctx = this.ctx, { weather, night, reducedMotion } = this.options;
     const t = reducedMotion ? 0 : this.sim.time;
-    if (night) {
-      ctx.fillStyle = 'rgba(7,25,39,.22)'; ctx.fillRect(0, 0, this.width, this.height);
+    // ★ 昼夜连续化（2026-10-04）：`dim` = 夜色浓度 0（白天）.. 1（深夜）。
+    //   旧代码是 `if (night) {...整层夜色} else if (sunny) {...光池光柱}` ——
+    //   一天只有两种画面，黎明 5–7 点会**突然**从光池跳到夜罩。
+    //   现在三层按 dim 叠加：夜色罩淡入 + 月晕浮现 + 光池光柱淡出。
+    //   门控仍留布尔（`sunny` 才画光池是**天气**门控，不是昼夜门控）。
+    const dim = 1 - daylightOf(this.options);
+    if (dim > 0.001) {
+      ctx.fillStyle = `rgba(7,25,39,${0.22 * dim})`; ctx.fillRect(0, 0, this.width, this.height);
       const moon = ctx.createRadialGradient(this.width * 0.72, this.height * 0.18, 0, this.width * 0.72, this.height * 0.18, this.width * 0.32);
-      moon.addColorStop(0, 'rgba(176,224,230,.10)'); moon.addColorStop(1, 'rgba(131,204,215,0)');
+      moon.addColorStop(0, `rgba(176,224,230,${0.10 * dim})`); moon.addColorStop(1, 'rgba(131,204,215,0)');
       ctx.fillStyle = moon; ctx.fillRect(0, 0, this.width, this.height);
-    } else if (weather === 'sunny') {
+    }
+    if (weather === 'sunny') {
       // §10.5 白天「阳光照耀」= 高斯光池 + 偶发梦幻光柱。
       // 老代码这里是**一条硬编码的** `.10` 径向、位置 `y .16h` —— 附录 A.2 #1/#2
       // 两条坑写的正是它（"光池铺满无明暗" / "压最亮处烧白"）。现在峰值/σ/位置
       // 全部由 `LightField` 按 F-10.5.2 给，画布只是它的一次投影。
-      this.drawLightPool();
-      this.drawShafts();
+      // ★ 夜里光池不该完全消失（云隙月光/路灯），保留 12% 作为"最暗那档"的下限。
+      this.drawLightPool(1 - 0.88 * dim);
+      this.drawShafts(1 - 0.88 * dim);
     } else if (weather === 'cloudy' || weather === 'rainy' || weather === 'stormy') {
-      ctx.fillStyle = weather === 'stormy' ? 'rgba(22,40,58,.25)' : weather === 'rainy' ? 'rgba(33,62,69,.18)' : 'rgba(41,70,66,.09)'; ctx.fillRect(0, 0, this.width, this.height);
+      const a = weather === 'stormy' ? .25 : weather === 'rainy' ? .18 : .09;
+      ctx.fillStyle = `rgba(${weather === 'stormy' ? '22,40,58' : weather === 'rainy' ? '33,62,69' : '41,70,66'},${a})`;
+      ctx.fillRect(0, 0, this.width, this.height);
     }
     if (this.options.quality === 'low') return;
     ctx.save(); ctx.globalCompositeOperation = 'screen'; ctx.lineWidth = 0.6;
@@ -333,7 +344,8 @@ export class PondEngine extends KoiRenderer {
       const m = this.motes[i];
       const x = this.width * (0.17 + m.x * 0.64) + Math.sin(t * 0.07 + i) * 15;
       const y = this.height * (0.16 + m.y * 0.7) + Math.cos(t * 0.09 + i) * 12;
-      ctx.strokeStyle = `rgba(221,246,200,${night ? 0.015 : 0.025 + Math.sin(t * 0.4 + i) * 0.009})`;
+      // 白天这圈波纹更明显（0.025±.009），夜里几乎看不见（0.015）
+      ctx.strokeStyle = `rgba(221,246,200,${byDaylight(0.015, 0.025 + Math.sin(t * 0.4 + i) * 0.009, this.options)})`;
       ctx.beginPath(); ctx.ellipse(x, y, 38 + m.seed * 54, 13 + m.seed * 24, m.seed * 3, 0.4, 4.9); ctx.stroke();
     }
     ctx.restore();
@@ -348,7 +360,13 @@ export class PondEngine extends KoiRenderer {
    *   · `.16` 是**颜料浓度**（这条径向涂多浓），来自附录 A.2 #2。
    *   把 .55 当 alpha 用，画面立刻白洗（就是那个坑本身）。
    */
-  drawLightPool() {
+  /**
+   * F-10.5.2 光池。`strength` = 强度倍率（2026-10-04 昼夜连续化新增）。
+   * ⚠️ 默认 1 = 白昼原样，**不传时行为与改动前逐位一致**。
+   *   夜里传 0.12 而不是 0：完全消失会让"阴天的夜里"变成一块死黑，
+   *   而需求 §10.5 画的是「夜里也有光池，只是光弱」。
+   */
+  drawLightPool(strength = 1) {
     const ctx = this.ctx;
     const [r, g, b] = this.light.channels.tint;
     const sigma = LIGHT.poolSigma * Math.min(this.width, this.height);
@@ -358,9 +376,10 @@ export class PondEngine extends KoiRenderer {
     const pool = ctx.createRadialGradient(cx, cy, 0, cx, cy, radius);
     // 三个 stop 是按高斯 `e^(−r²/2σ²)` 算的，不是随手拉的：
     // r=.91σ → .66　r=1.77σ → .21　r=2.6σ → .034
-    pool.addColorStop(0, `rgba(${r},${g},${b},${POOL_INK})`);
-    pool.addColorStop(0.35, `rgba(${r},${g},${b},${POOL_INK * 0.62})`);
-    pool.addColorStop(0.68, `rgba(${r},${g},${b},${POOL_INK * 0.22})`);
+    const k = POOL_INK * strength;
+    pool.addColorStop(0, `rgba(${r},${g},${b},${k})`);
+    pool.addColorStop(0.35, `rgba(${r},${g},${b},${k * 0.62})`);
+    pool.addColorStop(0.68, `rgba(${r},${g},${b},${k * 0.22})`);
     pool.addColorStop(1, `rgba(${r},${g},${b},0)`);
     ctx.save();
     ctx.globalCompositeOperation = 'screen';
@@ -378,7 +397,7 @@ export class PondEngine extends KoiRenderer {
    *    要同时表达「横向软边 × 纵向进出」就必须把带子切段、每段一个 `globalAlpha`。
    *    20 段 —— 再少会在淡出段看到台阶，再多就是白付建路径的钱（每帧最多 2 束）。
    */
-  drawShafts() {
+  drawShafts(strength = 1) {
     const shafts = this.light.activeShafts();
     if (!shafts.length) return;
     const ctx = this.ctx;
@@ -398,7 +417,7 @@ export class PondEngine extends KoiRenderer {
         const y0 = geo.top + (span * i) / slices;
         const y1 = geo.top + (span * (i + 1)) / slices;
         const ends = Math.sin(Math.PI * clamp(geo.alongAt((y0 + y1) * 0.5), 0, 1));
-        const alpha = SHAFT_INK * shaft.envelope * ends * ends;
+        const alpha = SHAFT_INK * shaft.envelope * ends * ends * strength;
         if (alpha < 0.002) continue;
         ctx.globalAlpha = alpha;
         ctx.beginPath();
@@ -671,7 +690,8 @@ export class PondEngine extends KoiRenderer {
     // Drawn above the fish: a clear frozen surface, with koi still visible below.
     // ★ 整体不透明度随 `ice` 连续变化：霜降(ice=.15)只是薄薄一层雾色，
     //   大雪(ice=1)才是真正封住。旧代码只有 night/白昼两档。
-    const iceAlpha = (this.options.night ? 0.72 : 1) * (0.30 + 0.70 * v.ice);
+    // ★ 昼夜连续化：夜里封冰反光弱（原 night?0.72:1），现按 dayLight 插值。
+    const iceAlpha = byDaylight(0.72, 1, this.options) * (0.30 + 0.70 * v.ice);
     ctx.globalAlpha = iceAlpha;
     const sheen = ctx.createLinearGradient(0, height, width, 0);
     sheen.addColorStop(0, 'rgba(203,236,235,.018)');
@@ -866,7 +886,9 @@ export class PondEngine extends KoiRenderer {
         const y = this.height * (0.18 + m.y * 0.65);
         ctx.save(); ctx.translate(x, y); ctx.scale(2.8, 1);
         const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, this.height * 0.28);
-        gradient.addColorStop(0, night ? 'rgba(159,197,197,.10)' : 'rgba(223,235,219,.18)'); gradient.addColorStop(1, 'rgba(232,242,228,0)');
+        // ★ 昼夜连续化：旧代码在两种**颜色**之间瞬切（青灰↔米白），
+        //   黎明时会出现"颜色跳变"，比亮度跳变更刺眼。改为**同色、只变强度**。
+        gradient.addColorStop(0, `rgba(191,216,213,${byDaylight(0.10, 0.18, this.options)})`); gradient.addColorStop(1, 'rgba(232,242,228,0)');
         ctx.fillStyle = gradient; ctx.fillRect(-this.height, -this.height, this.height * 2, this.height * 2); ctx.restore();
       }
     }

@@ -1,5 +1,17 @@
 export const AUDIO_TRACKS=[{id:'stream',file:'healing-stream.wav?v=1.9',loop:true},{id:'ocean',file:'ocean-waves.wav?v=1.12',loop:true},{id:'rain',file:'rain.wav?v=1.7',loop:true},{id:'wind',file:'wind.wav?v=1.5',loop:false},{id:'thunder',file:'thunder.wav',loop:false}];
+/**
+ * 背景声混合配比。
+ *
+ * ★ `night` 兼容两种类型（2026-10-04 昼夜连续化）：
+ *   - `boolean`（旧）⇒ 0.8/0.9/0.9 的整体衰减，等价于 dayLight=0/1；
+ *   - `number`（新，连续标量dayLight 0..1）⇒ 衰减量按 1-dayLight 线性插值，
+ *     黎明时声音会**渐强**而不是在 7:00 突然变大。
+ *   两种都接受，是为了不改 `ambientMix` 的既有调用方与单测
+ *   （`tests/atmosphere.test.js` 传的是布尔）。
+ */
 export function ambientMix(weather,season,night=false,theme='koi'){
+ // 夜色浓度 0（白天）.. 1（深夜）。布尔按旧口径取端点。
+ const dim=typeof night==='number'?Math.max(0,Math.min(1,1-night)):(night?1:0);
  // Wind is the peak of an occasional gust, never a continuous backing layer.
  const seasonal={spring:[.72,.07],summer:[.78,.05],autumn:[.65,.1],winter:[.3,.12]}[season]||[.7,.08];
  let [stream,wind]=seasonal,rain=0;
@@ -8,11 +20,11 @@ export function ambientMix(weather,season,night=false,theme='koi'){
  if(weather==='stormy'){stream*=.18;rain=.40;wind=.14}
  if(weather==='snowy'){stream*=.3;wind=Math.min(wind,.09)}
  if(weather==='foggy'){stream*=.85;wind*=.4}
- if(night){wind*=.8;stream*=.9;rain*=.9}
+ if(dim>0){const k=1-.1*dim;wind*=k;stream*=k;rain*=k}
  let ocean=0;
  if(theme==='coast'){
   // The coast has its own quiet field recording; inactive water always has an explicit zero target.
-  ocean=({rainy:.30,stormy:.28,snowy:.24,foggy:.32}[weather]??.4)*(night?.9:1);stream=0;wind=Math.min(wind,.07);
+  ocean=({rainy:.30,stormy:.28,snowy:.24,foggy:.32}[weather]??.4)*(1-.1*dim);stream=0;wind=Math.min(wind,.07);
  }
  const total=Math.max(1,stream+ocean+wind+rain);return {stream:stream/total,ocean:ocean/total,rain:rain/total,wind:wind/total};
 }

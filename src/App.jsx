@@ -27,7 +27,7 @@ export default function App(){
  const isCoast=theme==='coast';
  const [pageVisible,setPageVisible]=useState(()=>!document.hidden);
  useEffect(()=>{const changed=()=>setPageVisible(!document.hidden);document.addEventListener('visibilitychange',changed);return()=>document.removeEventListener('visibilitychange',changed)},[]);
- const env=useEnvironment(settings);const ambient=useAmbient(settings.sound&&!paused&&pageVisible,settings.volume,env.weather,env.season,env.night,theme);
+ const env=useEnvironment(settings);const ambient=useAmbient(settings.sound&&!paused&&pageVisible,settings.volume,env.weather,env.season,env.dayLight,theme);
  const notify=useCallback(text=>{setToast(text);clearTimeout(timer.current);timer.current=setTimeout(()=>setToast(''),3300)},[]);
  function selectTheme(id){if(id===theme){setPanel(null);return}if(!saveTheme(id))notify('主题暂未保存，下次启动将使用之前的风景。');setPanel(null);setPaused(false);setCoastMode('observe');setCoastView(null);setTheme(id)}
  const update=useCallback((key,value)=>setSettings(s=>({...s,[key]:value})),[]);const closePanel=useCallback(()=>setPanel(null),[]);
@@ -49,7 +49,7 @@ export default function App(){
  // 生态模式下**不**把 fishCount 放进 options —— 那边的滑杆是「重置为 N 尾」的选择器，
  // 不是实时参数；真的重置由设置面板的按钮显式触发（见 onResetPopulation）。
  // 否则任何一次设置变更（甚至挂载）都会把池塘整个推倒重来。
- const options=useMemo(()=>{const o={season:env.season,weather:env.weather,night:env.night,paused,desktopMode:!!desktop?.desktopMode,reducedMotion:settings.reducedMotion,fishSize:settings.fishSize,turtleCount:settings.turtleCount,quality:settings.quality,solarTerm:env.solarTerm,almanacProfile:env.almanacProfile,ecoMode:!!settings.ecoMode,ecoSpeed:settings.ecoSpeed,collision:settings.collision!==false,onThunder:ambient.thunder};if(!settings.ecoMode)o.fishCount=settings.fishCount;else if(initialSave?.pond)o.ecoSnapshot={...initialSave.pond,lastSeenWallClock:initialSave.lastSeenWallClock};return o},[env.season,env.weather,env.night,paused,settings.reducedMotion,settings.fishCount,settings.fishSize,settings.turtleCount,settings.quality,settings.ecoMode,settings.ecoSpeed,settings.collision,initialSave,env.solarTerm,env.almanacProfile,desktop?.desktopMode,ambient.thunder]);
+ const options=useMemo(()=>{const o={season:env.season,weather:env.weather,night:env.night,dayLight:env.dayLight,paused,desktopMode:!!desktop?.desktopMode,reducedMotion:settings.reducedMotion,fishSize:settings.fishSize,turtleCount:settings.turtleCount,quality:settings.quality,solarTerm:env.solarTerm,almanacProfile:env.almanacProfile,ecoMode:!!settings.ecoMode,ecoSpeed:settings.ecoSpeed,collision:settings.collision!==false,onThunder:ambient.thunder};if(!settings.ecoMode)o.fishCount=settings.fishCount;else if(initialSave?.pond)o.ecoSnapshot={...initialSave.pond,lastSeenWallClock:initialSave.lastSeenWallClock};return o},[env.season,env.weather,env.night,env.dayLight,paused,settings.reducedMotion,settings.fishCount,settings.fishSize,settings.turtleCount,settings.quality,settings.ecoMode,settings.ecoSpeed,settings.collision,initialSave,env.solarTerm,env.almanacProfile,desktop?.desktopMode,ambient.thunder]);
  function saveFish(f){const next=[...fish,f];if(!writeStore('fusheng-fish',next)){notify('存储空间不足，未能保存这尾锦鲤。');return}setFish(next);setPanel(null);notify(`${f.name}已游入池塘，下次见面它还在。`)}
  function removeFish(id){const next=fish.filter(f=>f.id!==id);if(writeStore('fusheng-fish',next)){setFish(next);notify('锦鲤已从池塘移走')}}
  function resizeFish(id,size){const next=fish.map(f=>f.id===id?{...f,size}:f);if(writeStore('fusheng-fish',next))setFish(next);else notify('存储空间不足，未能保存大小。')}

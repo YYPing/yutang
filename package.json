@@ -65,7 +65,8 @@
     "check:terms:desktop": "node tools/verify-terms-desktop.cjs",
     "check:term:delta": "node tools/check-term-delta.cjs",
     "check:frost": "node tools/check-frost-ui.cjs",
-    "probe:desktop": "node tools/probe-desktop-boot.cjs"
+    "probe:desktop": "node tools/probe-desktop-boot.cjs",
+    "check:daylight": "node tools/check-daylight.cjs"
   },
   "dependencies": {
     "react": "^19.1.0",

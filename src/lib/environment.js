@@ -65,6 +65,68 @@ export function getDayPhase(date = new Date()) {
   return 'night';
 }
 
+/* ── 昼夜连续化（2026-10-04）────────────────────────────────────────
+ * `getDayPhase()` 返回四个离散档，而下游有 15+ 处 `night ? A : B` 的硬切换：
+ *   光场 ambient 在 .36/.28 之间**瞬跳**、夜罩 alpha 在 0/.22 之间跳、
+ *   光池/光柱在`night` 一变就整层消失、蝴蝶与萤火虫互斥。
+ *   ⇒ 一天之内画面只有 4 种状态，黎明黄昏这两个最容易看出"跳"的时刻反而最粗。
+ *
+ * `dayLightAt()` 给出一个 **0..1 的连续亮度标量**（0 = 深夜，1 = 白昼），
+ * 下游把它插值到每一处幅度上。`getDayPhase()` 保留不变（它仍用于
+ * 「要不要画萤火虫」这类**门控**判断 —— 门控就该是离散的）。
+ *
+ * ★ 为什么不用"真·天文曙暮光"（太阳高度角）而用四个权重点：
+ *   · 太阳高度角要经度/纬度/日期，跨半球与极区会给出反直觉的答案（夏至极昼）；
+ *   · 本作「摸鱼桌面」要的是**情绪曲线**而非天文正确性，
+ *     而 5/7/17/19 这组时间点本来就是 `getDayPhase` 既有的分界
+ *     ⇒ 与既有行为完全对齐，只是把阶跃换成过渡。
+ *   真要天文口径，应当接 `fetchWeather().isDay` 做锚定（见 useEnvironment）。
+ */
+
+/** 亮度关键点（与 getDayPhase 的分界对齐）。值是 dayLight，**升序**。 */
+const DAYLIGHT_KEYS = Object.freeze([
+  { hour: 0, light: 0, phase: 'deep-night' },
+  { hour: 5, light: 0, phase: 'night' },      // 黎明起点：仍是夜
+  { hour: 7, light: 1, phase: 'day' },        // 白昼起点
+  { hour: 17, light: 1, phase: 'day' },       // 白昼终点
+  { hour: 19, light: 0, phase: 'night' },     // 入夜完成
+  { hour: 24, light: 0, phase: 'deep-night' },
+]);
+
+/** 单调三次插值（smoothstep）—— 两端一阶导为 0 ⇒ 过渡段起止都不"打钩"。 */
+const smoothstep = (t) => t * t * (3 - 2 * t);
+
+/**
+ * 当前时刻的**连续**昼夜亮度，0（深夜）.. 1（白昼）。
+ *
+ * 曲线形状（实测，见 tools/check-daylight.cjs）：
+ *   00:00–05:00  0.000 平台（深夜）
+ *   05:00–07:00  0 → 1 平滑上升（黎明，两端导数为 0）
+ *   07:00–17:00  1.000 平台（白昼）
+ *   17:00–19:00  1 → 0 平滑下降（黄昏）
+ *   19:00–24:00  0.000 平台（夜）
+ *
+ * ⚠️ **平台是有意为之**：真实白昼也不是全天一样亮，但本作只有一个"白昼"档，
+ *   若让07:00–17:00 内部也起伏，白天就会有一道缓慢明暗波纹在池面上晃 ——
+ *   那是另一个问题（且会让「水色随节气」的光场判据变脏）。先保持平坦。
+ *
+ * @param date 默认当前时间
+ * @returns {number} 0..1
+ */
+export function dayLightAt(date = new Date()) {
+  const hour = requireDate(date).getHours() + requireDate(date).getMinutes() / 60;
+  const keys = DAYLIGHT_KEYS;
+  for (let i = 0; i < keys.length - 1; i++) {
+    const a = keys[i], b = keys[i + 1];
+    // 边界用"半开"区间 + 末段兜底，避免 hour 恰在关键点上时 t 算出负值
+    if (hour < b.hour || i === keys.length - 2) {
+      const t = (hour - a.hour) / (b.hour - a.hour);
+      return a.light + (b.light - a.light) * smoothstep(Math.max(0, Math.min(1, t)));
+    }
+  }
+  return 0;
+}
+
 /**
  * Returns the current solar term, not a lunar festival or the next term.
  * Approximate apparent solar longitude, using the Meeus/NOAA equations:

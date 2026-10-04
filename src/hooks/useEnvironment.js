@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_CITY, fetchWeather, lookupApproximateCity, getSeason, getDayPhase, getSolarTerm, solarLongitude } from '../lib/environment.js';
+import { DEFAULT_CITY, fetchWeather, lookupApproximateCity, getSeason, getDayPhase, dayLightAt, getSolarTerm, solarLongitude } from '../lib/environment.js';
 import { readStore, writeStore, normalizeCity, normalizeWeather, readCachedWeather, weatherCacheKey, isWeatherFresh } from '../lib/storage.js';
 import { ALMANAC_MODES, almanacFromLongitude, blendTerm, cycleBlend, cycleOffset, resolveAlmanac, termSeason } from '../engine/almanac.js';
 
@@ -275,6 +275,30 @@ export function useEnvironment(settings) {
   const phase = getDayPhase(now);
   // Cached isDay describes the observation time, not the current clock.
   const night = settings.day === 'auto' ? (status === 'live' && fresh ? !data.isDay : phase === 'night') : settings.day === 'night';
+  // ★ 连续昼夜标量（2026-10-04）。`night` 保留为布尔做**门控**（萤火虫该不该画这类），
+  //   `dayLight` 负责**幅度**（夜罩 alpha、光场 ambient、水色亮度），后者决定观感。
+  //
+  // ⚠️ 为什么两者可能矛盾、怎么处理：
+  //   auto 模式下 `night` 会读在线天气的 `isDay`（**权威但离散**），
+  //   而 `dayLightAt(now)` 读**本机时钟**（连续但时区可能不对）。
+  //   时差/极端纬度下会打架（那边是白天、这边刚过午夜）。
+  //   处理：以本机时钟为主，但用 isDay 把值**夹进不相交的区间** ——
+  //   isDay 为真时不低于 .55、为假时不高于 .45。
+  //   ⇒ `night=false`（白天）时 dayLight 必> .5（不会画出夜景），
+  //     `night=true`（夜）时 dayLight 必< .5（不会在深夜画白光）。两者永不自相矛盾。
+  //
+  // ⚠️ 手动模式必须**精确取 1 / 0**，不能带夹取：
+  //   「留住白昼 / 一池星光」是用户的显式选择，端点必须与改动前**逐位一致**
+  //   —— 否则这次重构会顺手改掉手动模式下的观感，量具都测不出来是"改坏了"还是"本来就这样"。
+  const dayLight = settings.day === 'auto'
+    ? (() => {
+        const local = dayLightAt(now);
+        if (status === 'live' && fresh) {
+          return data.isDay ? Math.max(local, 0.55) : Math.min(local, 0.45);
+        }
+        return local;
+      })()
+    : settings.day === 'night' ? 0 : 1;
   return {
     city, setCity, locate, locationStatus, locationBusy, locationError,
     data, status, refresh, now,
@@ -286,6 +310,6 @@ export function useEnvironment(settings) {
       ? almanac.season
       : (settings.season === 'auto' ? getSeason(now, city.latitude) : settings.season),
     weather: settings.weather === 'auto' ? (data?.weather || 'sunny') : settings.weather,
-    night, solarTerm: almanac.term, almanac, almanacProfile, almanacMode,
+    night, dayLight, solarTerm: almanac.term, almanac, almanacProfile, almanacMode,
   };
 }

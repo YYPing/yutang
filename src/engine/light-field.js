@@ -85,6 +85,41 @@ export const LIGHT = Object.freeze({
   cloud: Object.freeze({ sunny: 0, snowy: 0.04, foggy: 0.06, cloudy: 0.1, rainy: 0.16, stormy: 0.22 }),
 });
 
+/* ══════════════════════════════════════════════════════════════════
+ * 昼夜连续化（2026-10-04）
+ *══════════════════════════════════════════════════════════════════ */
+
+/**
+ * 当前的**连续昼夜亮度**，0（深夜）.. 1（白昼）。
+ *
+ * ★ 为什么引擎要自己算一遍，而不是直接读 `options.dayLight`：
+ *   光场是所有渲染的**亮度基准**（`lightAt` 决定鱼亮不亮、
+ *   `referenceLit` 是归一化分母），它必须有一个**永远拿得到**的值 ——
+ *   而 `options` 来自 React，单测与量具经常直接 `new LightField()`。
+ *   所以兜底顺序是：`dayLight`（连续，新）→ `night`（布尔，旧）→ 0（全夜）。
+ *   **旧存档与既有单测只给 `night`，行为必须逐位不变。**
+ */
+export function daylightOf(options = {}) {
+  const d = options.dayLight;
+  if (Number.isFinite(d)) return clamp01(d);
+  return options.night ? 0 : 1;
+}
+
+/**
+ * 按昼夜亮度在「夜 / 昼」两端之间插值 —— 全代码统一的**幅度**插值口。
+ *
+ * ⚠️ 为什么要统一：整个项目有 15+ 处 `night ? A : B`，
+ *   各自写一遍插值必然出现有的地方插了、有的地方忘了（表现为局部仍跳变）。
+ *   收敛到一个函数后，"还有哪些地方是硬切换"可以用 grep 一次性查清。
+ *
+ * @param nightValue 夜色端（dayLight=0）
+ * @param dayValue 白昼端（dayLight=1）
+ * @param options 含 `dayLight`/`night` 的 options
+ */
+export function byDaylight(nightValue, dayValue, options = {}) {
+  return nightValue + (dayValue - nightValue) * daylightOf(options);
+}
+
 /**
  * 水下焦散光网（caustic net）—— 常量。
  *
@@ -377,12 +412,12 @@ export class LightField {
    * 只有进了光池/光柱的鱼被提亮。这是「一个改动只动一件事」的做法。
    */
   get referenceLit() {
-    return LIGHT.waterBase + (this.options.night ? LIGHT.ambientNight : LIGHT.ambientDay);
+    return LIGHT.waterBase + byDaylight(LIGHT.ambientNight, LIGHT.ambientDay, this.options);
   }
 
   /** F-10.5.1 全式。`x / y` 为画布 CSS 像素坐标。 */
   lightAt(x, y, width, height) {
-    const ambient = LIGHT.waterBase + (this.options.night ? LIGHT.ambientNight : LIGHT.ambientDay);
+    const ambient = LIGHT.waterBase + byDaylight(LIGHT.ambientNight, LIGHT.ambientDay, this.options);
     const raw = ambient + this.poolAt(x, y, width, height) + this.shaftAt(x, y, width, height) - this.cloudAt(x, y, width, height);
     return clampRange(raw, 0.12, 1.8);
   }

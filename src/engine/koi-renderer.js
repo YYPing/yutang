@@ -1,6 +1,6 @@
 import {clamp} from './simulation.js';
 import {koiBodyPoint,koiTailAngle,koiPectoralPose} from './koi-motion.js';
-import {LIGHT} from './light-field.js';
+import {LIGHT, byDaylight} from './light-field.js';
 const TAU = Math.PI * 2;
 
 /**
@@ -108,7 +108,8 @@ export class KoiRenderer {
     ctx.rotate(fish.heading);
     // 俯视图下的「侧翻」= 体宽投影收窄；1 − 0.82 ⇒ 翻到最后只剩 18% 宽度
     ctx.scale(scale, scale * (1 - tilt * 0.82));
-    ctx.globalAlpha = shadow ? 0.22 : fish.depth * (this.options.night ? 0.82 : 0.98);
+    // ★ 昼夜连续化：原 night?0.82:0.98 硬切，现按 dayLight 插值（端点逐位一致）
+    ctx.globalAlpha = shadow ? 0.22 : fish.depth * byDaylight(0.82, 0.98, this.options);
     if (dying > 0) ctx.globalAlpha *= (1 - dying) * (1 - dying);
     // §6 鱼苗「近半透明」：aFade 由 eco-bridge 按日龄算好（0.52 → 1）。
     // 手绘鱼没有这个字段 ⇒ undefined，按 1 处理，与改动前逐像素一致。

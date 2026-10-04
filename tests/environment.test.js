@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { DEFAULT_CITY, getSeason, getDayPhase, getSolarTerm, mapWeatherCode, searchCities, fetchWeather } from '../src/lib/environment.js';
+import { DEFAULT_CITY, getSeason, getDayPhase, dayLightAt, getSolarTerm, mapWeatherCode, searchCities, fetchWeather } from '../src/lib/environment.js';
 import * as environment from '../src/lib/environment.js';
 
 test('meteorological seasons change at local month boundaries and invert south of the equator', () => {
@@ -18,6 +18,73 @@ test('meteorological seasons change at local month boundaries and invert south o
 test('day phase boundaries use local time for the offline scene', () => {
   for (const [hour, expected] of [[4, 'night'], [5, 'dawn'], [6, 'dawn'], [7, 'day'], [16, 'day'], [17, 'dusk'], [18, 'dusk'], [19, 'night'], [23, 'night']]) {
     assert.equal(getDayPhase(new Date(2026, 8, 27, hour)), expected);
+  }
+});
+
+/* ══════════════════════════════════════════════════════════════════
+ * 昼夜连续化（2026-10-04）
+ * `dayLightAt()` 是 `getDayPhase()` 的连续版：0（深夜）.. 1（白昼）。
+ * 存在的理由是下游有 15+ 处 `night ? A : B` 硬切换 ⇒ 一天只有4 种画面。
+ * ══════════════════════════════════════════════════════════════════ */
+const dl = (h, m = 0) => dayLightAt(new Date(2026, 8, 27, h, m));
+
+test('★ dayLight 四个平台与关键点取值正确（与 getDayPhase 分界对齐）', () => {
+  // 平台
+  for (const h of [0, 1, 2, 3, 4]) assert.equal(dl(h), 0, `${h}:00 应为深夜 0`);
+  for (const h of [7, 10, 12, 15, 16, 17]) assert.equal(dl(h), 1, `${h}:00 应为白昼 1`);
+  for (const h of [19, 20, 22, 23]) assert.equal(dl(h), 0, `${h}:00 应为夜 0`);
+  // 关键点（0/1 平台端点与过渡中点）
+  assert.equal(dl(5), 0,'05:00 黎明起点应为 0');
+  assert.equal(dl(6), 0.5, '06:00 过渡中点应为 0.5');
+  assert.equal(dl(7), 1, '07:00 白昼起点应为 1');
+  assert.equal(dl(18), 0.5, '18:00 过渡中点应为 0.5');
+  assert.equal(dl(19), 0, '19:00 入夜完成应为 0');
+});
+
+test('★ dayLight 单调可逆：黎明严格升、黄昏严格降，且无跳变（相邻分钟差 < 0.02）', () => {
+  // 黎明 5:00 → 7:00 逐分钟必须单调升
+  for (let m = 1; m <= 120; m++) {
+    const a = dl(5, m - 1), b = dl(5, m);
+    assert.ok(b >= a - 1e-9, `黎明 ${m} 分钟处回落：${a} -> ${b}`);
+    assert.ok(b - a < 0.02, `黎明 ${m} 分钟处跳变过大：Δ=${(b - a).toFixed(4)}`);
+  }
+  // 黄昏 17:00 → 19:00 逐分钟必须单调降
+  for (let m = 1; m <= 120; m++) {
+    const a = dl(17, m - 1), b = dl(17, m);
+    assert.ok(b <= a + 1e-9, `黄昏 ${m} 分钟处回升：${a} -> ${b}`);
+    assert.ok(a - b < 0.02, `黄昏 ${m} 分钟处跳变过大：Δ=${(a - b).toFixed(4)}`);
+  }
+  // 平台段必须**逐位不变**（不能有缓慢漂移）
+  for (let h = 8; h < 16; h++) {
+    assert.equal(dl(h), 1, `${h}:00 白昼平台必须恒为 1`);
+    assert.equal(dl(h, 30), 1, `${h}:30 白昼平台必须恒为 1`);
+  }
+});
+
+test('★ dayLight 覆盖全天 1440 分钟、值域严格 [0,1]、无NaN', () => {
+  let min = 1, max = 0;
+  for (let m = 0; m < 1440; m++) {
+    const v = dl(Math.floor(m / 60), m % 60);
+    assert.ok(Number.isFinite(v), `${Math.floor(m / 60)}:${m % 60} 是 ${v}`);
+    min = Math.min(min, v); max = Math.max(max, v);
+  }
+  assert.equal(min, 0, `全天最小值应为 0，实为 ${min}`);
+  assert.equal(max, 1, `全天最大值应为 1，实为 ${max}`);
+});
+
+test('dayLight 拒绝非法日期（与 getDayPhase 同一把尺子）', () => {
+  assert.throws(() => dayLightAt(new Date('invalid')), RangeError);
+});
+
+test('★ 阳性对照：把 getDayPhase 的边界挪动，dayLight 平台必须跟着动', () => {
+  // 若 dayLight 与 getDayPhase 脱钩（例如各写一套时间点），
+  // 就会出现「getDayPhase 说 night 但 dayLight=1」的矛盾画面。钉住两者的对应关系。
+  for (let h = 0; h < 24; h++) {
+    const phase = getDayPhase(new Date(2026, 8, 27, h));
+    const v = dl(h);
+    if (phase === 'day') assert.equal(v, 1, `${h}:00 getDayPhase=day 但 dayLight=${v}`);
+    if (phase === 'night') assert.equal(v, 0, `${h}:00 getDayPhase=night 但 dayLight=${v}`);
+    // dawn / dusk 允许 0<v<1（这正是连续化要覆盖的窗口）
   }
 });
 
