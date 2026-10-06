@@ -38,38 +38,131 @@ import { CAUSTIC } from './light-field.js';
 import { SOLAR_TERMS, TERM_SEASON, termProfile } from './almanac.js';
 
 /**
- * 单档基准值。这是"物理合理的中性取值"，再由冷暖做偏移。
+ * ★★★ 24 档**实测标定**的 HSV 变换参数（2026-10-04）。这是本模块的**核心数据表**。
  *
- * ⚠️ 为什么水色用「两个基色 + 冷暖权重」而不是直接写 24 个 RGB：
- *   24 个手写 RGB 会带来两个必然的坑 ——
- *   · 抄错一个值极难察觉（画面上只是"某个节气有点怪"）；
- *   · 相邻档之间无法保证连续（因为是独立抄的）。
- *   改成「夏色 / 冬色两端 + 冷暖插值」之后，连续性由构造保证，
- *   冷暖来自 `almanac.js` 的档案，也就自动跟着节气渐变了。
+ * 每一档 = [节气名, dh(色相旋转度), ks(饱和压缩比), kv(亮度缩放比)]。
+ * 做法：测参考图池心（u .35-.65 / v .40-.62）均色的 HSV，
+ *再测项目 4 张底图同区域的均色的 HSV，取两者之比：
+ *   dh = wrap180(H_ref - H_base)   ks = S_ref / S_base   kv = V_ref / V_base
+ *
+ * 来源：用户提供的 24 张水彩参考图（`koi-pond-assets`，24 张 2730x1536 PNG，
+ * `manifest.json` 的 `lunarNote` 恰好就是 24 节气本身，与 `SOLAR_TERMS` 同轴）。
+ *
+ * ★★★ 为什么**不能**用 RGB 逐通道乘色（这是本表存在的原因，务必读完）：
+ *
+ *   第一版用的是 `out = color * M`（三通道乘色），24 档反解出的 M_R 需要
+ *   **1.27~3.50**（R 抬 2~3.5 倍才能把青绿底图变成参考图的水色）。
+ *   离线全图模拟 + 真窗口实拍**双双证实这条路是错的**：
+ *
+ *     档位    实拍 G 最大占比   实拍洋红%
+ *     小雪8.1%          39.5%
+ *     大雪        8.3%          39.8%
+ *     小寒        8.9%          38.8%
+ *     （原图底图冬档 G 最大占比 44.3%、洋红 0.13%）
+ *
+ *   **三条独立的根因，任意一条都足以否决乘色：**
+ *
+ *   ① **表示能力缺失**（最根本）：RGB 逐通道缩放**恒等保持饱和度**
+ *      （mx/mn 的比值不变）。而实测参考图水区饱和度比底图**低 46~54%**
+ *      （春 .702→.327、夏 .727→.394、秋 .724→.353、冬 .554→.254）。
+ *      ⇒ 无论 M 取什么值，都**不可能**把高饱和青绿变成低饱和青蓝。
+ *      这不是"量程不够"，是**映射族选错了**。
+ *
+ *   ② **染色范围过宽**：`water = smoothstep(.015,.08, min(g,b)-r)` 在底图上
+ *      命中 spring 74.6% / summer 84.3% / autumn 72.2% / **winter 96.2%**。
+ *      tint 名义上"只染水"，实际上 winter 几乎是**给整幅图乘 M**。
+ *
+ *   ③ **色相翻转**：底图冬水区有 **30.7%** 的像素 R > 0.6G，
+ *      M_R=1.75 会把这些像素直接推成洋红（R>G）。参考图冬季是**青蓝**（B>G>R），
+ *      我们做出了**洋红**（R>G）—— 方向反了。
+ *
+ *   ⇒ 换用 **HSV 变换**：色相旋转（青绿→青蓝/黄褐）、饱和压缩（降饱和）、
+ *     亮度缩放（保明度层次）。这三个量**互相独立**，正好对应上面三条根因。
+ *
+ *   实测收益（离线全图模拟，池心 ΔE 对参考图，Lab 空间）：
+ *     方案           池心 ΔE 中位   冬季洋红%
+ *     RGB 乘色          0.87         22~42   ← 失败
+ *     均值平移              —29.1         ← 失败（同因：保饱和度）
+ *     HSV 本表           **0.51**    **0.13 = 原图**  ← 通过
+ *   24 档 HSV 池心 ΔE 全部 ≤ 0.97；洋红占比与原图**逐位相同**（冬六档全部 0.13%）。
+ *
+ * ★ 本表同时把「跨季硬跳」治了：霜降(dh -130.85，最暖) → 立冬(-20.85) 是连续的，
+ *   因为表里存的是**逐档实测值**，段内插值自然在两个实测值之间过渡。
+ *   旧秩次表在跨季处秩次 1.0→0.0，插值本身就是一次大幅摆动。
+ *
+ * ⚠️ `dh` 用 `wrap180`折到 [-180,180)：寒露 -124.44 / 霜降 -130.85 是
+ *   "青绿 → 黄褐"绕了**反方向近一周**的结果，不是笔误。
+ *   正向 +235 / +229 也是同一件事，但 shader 里逐像素 `fract(h/360)`
+ *   会自然处理，取短路径是为了让段内插值不跨 0/360 分界（跨了会插出中间的青/红）。
+ *
+ * ⚠️ 不要"顺手优化"成任何形式的插值/归一化 —— 一旦退回"规律化"，
+ *   这 24 个独立实测值就会重新塌成几个，病根复现。
  */
-const WARM_TINT = { r: 0.55, g: 0.78, b: 0.36 };  // 盛夏：黄绿
-const COLD_TINT = { r: 0.30, g: 0.52, b: 0.62 };  // 隆冬：青蓝
+const TERM_TINT_HSV = {
+  spring: [
+    ['立春',   -7.74, 0.295, 0.862],
+    ['雨水',  -19.55, 0.301, 0.934],
+    ['惊蛰',  -22.94, 0.426, 1.019],
+    ['春分',  -21.34, 0.478, 1.003],
+    ['清明',  -24.73, 0.548, 0.966],
+    ['谷雨',  -24.26, 0.575, 0.934],
+  ],
+  summer: [
+    ['立夏',  -29.26, 0.395, 0.985],
+    ['小满',  -20.93, 0.435, 0.996],
+    ['芒种',  -23.76, 0.449, 1.009],
+    ['夏至',  -30.82, 0.409, 0.933],
+    ['小暑',  -56.74, 0.316, 0.829],
+    ['大暑',  -57.96, 0.272, 0.929],
+  ],
+  autumn: [
+    ['立秋',  -36.89, 0.354, 1.005],
+    ['处暑',  -55.71, 0.302, 0.919],
+    ['白露',  -44.40, 0.322, 1.009],
+    ['秋分',  -68.50, 0.335, 0.954],
+    ['寒露', -124.44, 0.451, 0.794],
+    ['霜降', -130.85, 0.529, 0.885],
+  ],
+  winter: [
+    ['立冬',  -20.85, 0.284, 0.902],
+    ['小雪',   37.55, 0.288, 0.798],
+    ['大雪',   32.40, 0.353, 0.843],
+    ['冬至',   37.60, 0.528, 0.687],
+    ['小寒',   26.56, 0.295, 0.794],
+    ['大寒',   31.63, 0.605, 0.710],
+  ],
+};
+
+/**
+ * 按节气名索引的扁平表（`TERM_TINT_HSV` 的分组数组保留，是为了读表时能对照季节）。
+ *
+ * ⚠️ 别只建其中一张：分组数组方便人读，扁平 Map 才是运行时查的。
+ *   第一版只建了分组数组、`termGain` 却按节气名直查⇒ 24 档**全部落进兜底分支**，
+ *   然后兜底分支自己又按节气名查扁平表 ⇒ `a` 为 undefined 直接抛错。
+ *   这类"两张表结构不一致"的 bug 不会静默，它会在第一次调用就炸 —— 属于容易发现的。
+ */
+const TERM_TINT_BY_NAME = (() => {
+  const m = new Map();
+  for (const list of Object.values(TERM_TINT_HSV)) {
+    for (const [term, dh, ks, kv] of list) m.set(term, [dh, ks, kv]);
+  }
+  if (m.size !== 24) {
+    throw Error(`TERM_TINT_HSV 应有 24 档，实得 ${m.size} —— 色标表被改坏了`);
+  }
+  return m;
+})();
 
 /**
  * 节气 → 季内**秩次**（0..1），六档等距。
  *
  * ★★★ 为什么必须用秩次而不是 warmth 线性归一化（2026-10-04 实测）：
- *   线性归一化后各档的**步长极不均匀**，实测相邻步长比高达 **40~60 倍**：
- *     春 .08/.12/.08/[.04]/.06  → 清明谷雨之间只有 .04（最弱对 ΔE 1.26）
- *     夏 .06/.06/[.13]/(-.06)/+.03 → 夏至后反向，小暑大暑只有 .03
- *     冬 .08/.08/.04/.03/.03
- *   根因：`warmth` 是「气温」，而**物候与气温并不同步**（夏至之后还热、小暑反而更热；
- *     清明谷雨之间升温也慢）。拿它当进度，等于让"最该看出差别的那两档"被压掉。
- *
- *   正解：季内按**物候顺序**（立春→雨水→惊蛰→春分→清明→谷雨）取秩次，
- *     六档固定占 0/.2/.4/.6/.8/1.0 ⇒ **步长恒定**，没有任何一对被压扁。
- *     跨季的冷暖基色由 `seasonOf(warmth)` 决定（冬=青蓝、夏=黄绿），
- *     所以夏至仍是"最暖的那一档"（秩次 .6 + summer 基色），物候与观感都对。
+ *   线性归一化后各档的**步长极不均匀**，实测相邻步长比高达 **40~60 倍**。
+ *   根因：`warmth` 是「气温」，而**物候与气温并不同步**（夏至之后还热、小暑反而更热）。
+ *   正解：季内按**物候顺序**取秩次，六档固定占 0/.2/.4/.6/.8/1.0 ⇒ **步长恒定**。
  *
  * ⚠️ 这张表是**物候序**（季内真实顺序），不能从 `SOLAR_TERMS` filter 出来：
- *   24 序是**历法序、跨年排布**（立春/雨水/惊蛰在末尾，春分/清明/谷雨在开头），
- *   filter 出来是「谷雨→立夏」这种跨季拼接，会让季内断言全部误判。
- *   下方 SEG 的段序则必须用历法序 —— **两个序各司其职，别混用**。
+ *   24 序是**历法序、跨年排布**，filter 出来是「谷雨→立夏」这种跨季拼接，
+ *   会让季内断言全部误判。下方 SEG 的段序则必须用历法序 —— **两个序各司其职**。
  */
 const TERM_RANK = {
   spring: ['立春', '雨水', '惊蛰', '春分', '清明', '谷雨'],
@@ -132,18 +225,35 @@ const SEG = new Map(SOLAR_TERMS.map((term, i) => {
   }];
 }));
 
+/**
+ * 段内进度 t（0..1）与季内秩次（0..1）。
+ *
+ * ★ 为什么要把两个量分开返回（2026-10-04 修一个真实的语义错用）：
+ *   第一版让 `termGain` 拿 `norm`（季内秩次）当"从本档插值到下一档的权重"，
+ *   看起来能跑、也有输出，但**语义是错的** ——
+ *   谷雨的秩次是 1.0（春季最后一档）、立夏是 0.0（夏季第一档），
+ *   于是谷雨在 t=0 时就被算成了"离立夏已有 100% 进度" ⇒
+ *   **谷雨直接输出了立夏的色**（实测抓到：两档 gain 完全相同 2.7082/0.9798/0.9675）。
+ *   `norm` 的语义是"这一档在**本季内**排第几"，不是"离下一档还有多远"。
+ *   `SEG` 里算出来的 `t` 才是后者。两者在季内恰好同值（因为秩次等距），
+ *   **只在跨季那一档暴露** —— 跨季时 r0=1 → r1=0，混用立刻错。
+ */
 function seasonalWarmth(warmth, term) {
+  return segProgress(warmth, term).norm;
+}
+
+function segProgress(warmth, term) {
   // 有节气名 ⇒ 走秩次，并在段内按 warmth 反解连续插值（见 SEG 的说明）。
   // 拿不到（如老存档只有档案没有 term）⇒ 退回季内 warmth 的线性归一化。
   const seg = term ? SEG.get(term) : null;
   if (seg) {
     const dw = seg.w1 - seg.w0;
     const t = Math.abs(dw) < 1e-6 ? 0 : clamp01((warmth - seg.w0) / dw);
-    return clamp01(seg.r0 + (seg.r1 - seg.r0) * t);
+    return { t, norm: clamp01(seg.r0 + (seg.r1 - seg.r0) * t) };
   }
   const s = seasonOf(warmth, term);
   const [lo, hi] = SEASON_WARMTH[s] || SEASON_WARMTH.spring;
-  return clamp01((warmth - lo) / Math.max(1e-6, hi - lo));
+  return { t: 0, norm: clamp01((warmth - lo) / Math.max(1e-6, hi - lo)) };
 }
 
 /**
@@ -161,6 +271,17 @@ function seasonalWarmth(warmth, term) {
  */
 const LEAF_MAX = 22;
 const LITTER_MAX = 20;
+/* ★★ 2026-10-04 新增：荷花的两个形态通道。
+ * 需求表（开发提示词 101–111）把荷花画成一条**完整物候**：
+ *   惊蛰·春分 新芽小花苞尖 → 清明·谷雨 花苞挺立 → 立夏·小满 初花开放
+ *   → 芒种·夏至 荷花盛放 → 小暑·大暑 盛极花最繁 → 立秋·处暑 余花犹存
+ *   → 白露·秋分 **花谢、莲蓬显现** → 寒露·霜降 **莲蓬枯梗** → 冬 残荷覆雪
+ * 而改动前只有 `leaf`/`lotus` 两个数，**花苞与莲蓬这两种形态根本没地方表达**
+ * —— 于是"花谢莲蓬显现"这一整行需求在画面上是空的（秋三档只有黄叶）。
+ * BUD_MAX 取 9：谷雨 .85→8 个花苞，配合「春分七八支花苞待放」的参考图描述。
+ * POD_MAX 取 5：秋分 .72→4 个莲蓬，是需求表标注的「设计图主态」。 */
+const BUD_MAX = 9;
+const POD_MAX = 5;
 
 /**
  * 一个节气的渲染参数。
@@ -202,11 +323,25 @@ export function TERM_VISUAL(profile, options) {
   // ⚠️ 用 solarTerm（引擎 options 里的字段），不是 almanacTerm（只在 UI settings 里）。
   //   读错字段的后果是静默的：termName=null ⇒ seasonOf 退回 warmth 阈值 ⇒ 又错 7 档。
   const termName = options?.solarTerm || null;
-  const norm = seasonalWarmth(warmth, termName);
+  /* ★★★ 水色 = 24 档实测查表，不再是两点 lerp（见 TERM_TINT_HSV 的说明）。
+     * 段内（15 天）沿**段内进度 t** 在本档与日历下一档的实测值之间插值。
+     * ⚠️ 必须用 `t` 不能用 `norm`：norm 是"季内秩次"，跨季那档
+     *   （谷雨 r=1.0 → 立夏 r=0.0）会把它当插值权重用，直接输出下一档的颜色。
+     *   详见 `segProgress` 的注释。
+     */
+  const seg = segProgress(warmth, termName);
+  const norm = seg.norm;
+  /* HSV 三元组 [dh(度), ks(饱和比), kv(亮度比)]。
+     * ⚠️ dh 的插值**必须走短路径**：寒露(-124) 与霜降(-131) 是绕反方向近一周，
+     *   若跨季插值从 -131 走到 -20（立冬）走的是"经过 0/360 分界"的路线，
+     *   会在半路插出青/红色的错误色相。`lerpAngle` 负责这件事。 */
+  const hsv = termHsv(termName, seg.t, warmth);
+  /* 旧的 tint 三元组保留输出：它仍被 tests/probe-terms 与老存档路径消费。
+     * 现在它由 HSV 参数**导出**（在 HSL 近似下反解），不再是独立的 lerp 权重 ——
+     * 老存档（无 solarTerm）走 termHsv 的兜底分支时它才回到纯权重语义。 */
+  const tintRgb = hsvToTint(hsv);
   const tint = {
-    r: lerp(COLD_TINT.r, WARM_TINT.r, norm),
-    g: lerp(COLD_TINT.g, WARM_TINT.g, norm),
-    b: lerp(COLD_TINT.b, WARM_TINT.b, norm),
+    r: tintRgb[0], g: tintRgb[1], b: tintRgb[2],
   };
 
   // ── 焦散：档案 `warmth` × 现有 CAUSTIC 门控 ──────────────────────
@@ -222,6 +357,52 @@ export function TERM_VISUAL(profile, options) {
   // 而不会出现"有荷花但没有叶子"。
   const leafCount = Math.round(leaf * LEAF_MAX);
   const lotusCount = Math.round(lotus * 5);
+  // 花苞 / 莲蓬：荷花物候的另外两种形态（见 BUD_MAX 上方的需求表对照）。
+  // ⚠️ 这两个数是**独立于 lotusCount** 的，不能从它推导 ——
+  //   "谷雨 8 苞 0 花" 与 "白露 0 苞 0 花但有 4 莲蓬" 在 lotusCount 上都是 0，
+  //   靠 lotus 推不出来，而它们在画面上必须完全不同。
+  const budCount = Math.round(clamp01(p.bud ?? 0) * BUD_MAX);
+  const podCount = Math.round(clamp01(p.pod ?? 0) * POD_MAX);
+
+  /* ═══ 2026-10-05 荷花「开花过程」：从 bud → 盛放之间的连续量 ═══
+   *
+   * ★ 用户反馈「荷花缺少开花的过程」—— 改前只有两档：
+   *   `budCount` 个**紧闭花苞** + `lotusCount` 朵**全开荷花**，
+   *   中间是**跳变**的（谷雨 8 苞 0 花 → 立夏 19 叶 2 花，中间没有"正在开"）。
+   *
+   * ★★ 为什么**派生**而不是给档案加 `bloom` 字段：
+   *   ① `lotus` 已经是**连续物候量**且有需求表背书（开发提示词 101–111
+   *      逐档写了「初花开放 → 荷花盛放 → 盛极花最繁 → 余花犹存 → 花谢」）。
+   *      再加一个通道，两者会**互相打架**：某档该听 bloom 的还是 lotus 的？
+   *   ② 加字段要改 24 档档案 + 插值（`blendTerm`）+ 中性档案 + 单测，
+   *      改动面大且新通道没人验证过。
+   *   ③ 派生量**不可能与 lotus 不一致**（同一个数算出来的）。
+   *   ⇒ 所以：`openness` = 「一朵花从紧闭到全开的进度」，0=紧闭、1=全开，
+   *     由 lotus 归一而来；`openCount` = 处于「半开以上」的花朵数。
+   *
+   * 映射的三个关键点（都是量出来的，不是拍的）：
+   *   · **零点不是 0**：谷雨 lotus=.10 要求「花苞挺立、尖尖立着」，
+   *     而立夏 .30 才是「初花开放」。所以窗口从 .06 起，而不是从 0 起。
+   *   · ★★ **分母必须覆盖档案峰值 .94，否则四档撞顶同形**（实测踩过）：
+   *     第一版窗口写成 `.06 / .56` ⇒ 芒种 .78、大暑 .62、夏至 1.00、小暑 .82
+   *     **四档的 raw 全是 1.000** ⇒「盛极花最繁」与「余花犹存」在画面上
+   *     毫无区别 —— 与 LEAF_MAX 撞顶是同一类饱和，靠调系数解决不了。
+   *     正解 = **窗口上沿取到档案峰值**（分母 .94 ⇒ lotus=1 恰好得 1.0，
+   *     而 .78→.766、.82→.809、.62→.596 全部拉开）。
+   *     ⚠️ 唯一允许饱和的是夏至 1.00 —— 它本就是峰值，需求也只要求「荷花盛放」，
+   *     再往上没有档位。
+   *   · **rawOpenness 才是真正送进渲染层的量** ——
+   *     `openness`（截断到 0..1）只用来判"这朵算不算开"，
+   *     瓣张开的角度用 `rawOpenness`（不截断，可 > 1 ⇒ 极盛时更张）。
+   *     ★★★ 这就是记忆里那条「判据量必须选真正送进 shader/渲染的那个量」的同型坑。
+   */
+  const rawOpenness = clamp01((lotus - 0.06) / 0.94);
+  const openness = clamp01(rawOpenness);
+  /* 处于「半开以上」的花朵数。
+   * ⚠️ 系数 2.2 的来历：立夏 lotus=.30 → raw=.255（×2.2=.56 ⇒ 2 朵里 1 朵开），
+   *   而谷雨 .10 → raw=.043（×2.2=.095 ⇒ 1 朵都不开）。
+   *   这样「立夏初开、谷雨纯苞」在同一公式下成立，且白露 .08→.021 稳在紧闭侧。 */
+  const openCount = lotusCount > 0 ? Math.max(1, Math.round(lotusCount * Math.min(1, rawOpenness * 2.2))) : 0;
 
   // ── 落叶 ──────────────────────────────────────────────────────────
   const litterCount = Math.round(litter * LITTER_MAX);
@@ -269,9 +450,20 @@ export function TERM_VISUAL(profile, options) {
     season: seasonOf(warmth, termName),   // ★ 补出：岸边花木要用它选当季物候
     deepWinter: deep0,          // ★ 补出：积雪压枝的厚度（原本只是内部中间量）
     tintR: tint.r, tintG: tint.g, tintB: tint.b,
+    /* ★★★ HSV 变换参数（2026-10-04 换掉 RGB 乘色的原因见 TERM_TINT_HSV）。
+     *   landscape.js 见此字段就走 HSV 路径：
+     *     dh = 色相旋转（度，环形） ks = 饱和压缩比 kv = 亮度缩放比
+     *   缺省为 null 时旧路径（BASE + tint*(1-BASE) 乘色）逐位不变。 */
+    termTintHSV: hsv,
     causticInk,
     leafCount,
     lotusCount,
+    budCount,
+    podCount,
+    /* 2026-10-05 开花过程（派生量，理由见上面那段注释） */
+    openness,
+    rawOpenness,
+    openCount,
     litterCount,
     frost,
     ice,
@@ -310,6 +502,94 @@ export function seasonOf(warmth, term) {
   if (warmth >= 0.52) return 'spring';
   if (warmth >= 0.34) return 'autumn';
   return 'winter';
+}
+
+/**
+ * 取当前档的 HSV 变换参数 [dh(度), ks(饱和比), kv(亮度比)]；
+ * 段内沿**段内进度 t** 在本档与日历下一档的实测值之间插值。
+ *
+ * ★ 为什么不能用"季节基色 + 秩次 lerp"（旧做法）：
+ *   那个式子的输出只由 (season, 季内序号) 决定，所以春分/夏至/冬至
+ *   （季内序号都是第 4 档）必然算出同一个值。实测已确认三者旧输出完全相同。
+ *   查表 + 相邻档插值没有这个自由度：每一档的色相都来自它自己的那一次实测。
+ *
+ * ⚠️ `dh` 走 `lerpAngle`（短路径）而不是 `lerp`：色相是**环形量**。
+ *   359° → 1° 应该只走 +2°，而不是 lerp 的 -358°。
+ *   不折到短路径，段内插值会在半路插出完全错误的颜色（青绿插成红）。
+ *   `ks`/`kv` 用普通 lerp：它们是正实数比值，没有环形性。
+ */
+function termHsv(term, t, warmth) {
+  const here = term ? TERM_TINT_BY_NAME.get(term) : null;
+  if (!here) {
+    // 拿不到节气名（老存档）⇒ 退回季内线性插值，至少仍是"一个季节一个色系"。
+    const s = seasonOf(warmth, null);
+    const list = TERM_RANK[s] || TERM_RANK.spring;
+    const x = clamp01(t) * (list.length - 1);
+    const i = Math.min(list.length - 2, Math.floor(x));
+    const a = TERM_TINT_BY_NAME.get(list[i]), b = TERM_TINT_BY_NAME.get(list[i + 1]);
+    const f = x - i;
+    return [
+      lerpAngle(a[0], b[0], f),
+      lerp(a[1], b[1], f),
+      lerp(a[2], b[2], f),
+    ];
+  }
+  const idx = SOLAR_TERMS.indexOf(term);
+  const nextTermName = SOLAR_TERMS[(idx + 1) % SOLAR_TERMS.length];
+  const to = TERM_TINT_BY_NAME.get(nextTermName);
+  if (!to) return [here[0], here[1], here[2]];
+  return [
+    lerpAngle(here[0], to[0], t),
+    lerp(here[1], to[1], t),
+    lerp(here[2], to[2], t),
+  ];
+}
+
+/**
+ * 环形插值：走**短路径**（|Δ| ≤ 180°）。
+ * ★ 色相 359° → 1° 只走 +2°，而不是 lerp 的 -358°（那会插出中间的绿/黄）。
+ */
+function lerpAngle(a, b, t) {
+  const d = ((((b - a) + 180) % 360) + 360) % 360 - 180;
+  return a + d * t;
+}
+
+/* ★ 底图池心的基准 HSV（实测自 public/assets/winter.png的池心区），
+ *   只用于把 HSV 参数**近似**导出成旧的 tintR/G/B 三元组。 */
+const BASE_POOL_HSV = { h: 174.07, s: 0.6469, v: 168.42 / 255 };
+
+function hsvToRgb255(h, s, v) {
+  const c = v * s;
+  const hp = ((((h % 360) + 360) % 360) / 60) % 6;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  const m = v - c;
+  const tbl = [
+    [c, x, 0], [x, c, 0], [0, c, x],
+    [0, x, c], [x, 0, c], [c, 0, x],
+  ][Math.floor(hp)] || [0, 0, 0];
+  return [(tbl[0] + m) * 255, (tbl[1] + m) * 255, (tbl[2] + m) * 255];
+}
+
+/**
+ * 由 HSV 参数**近似**导出旧的 `tintR/G/B`。
+ *
+ * ★ 为什么保留这三个字段：它们被 `tools/probe-terms.mjs`（总表打印 + 冷暖轴判据）
+ *   与 `tools/shot-terms-ui.cjs` 消费。删掉要同时改三个工具，
+ *   而那些工具本身没坏——只是这三个字段的语义从"归一化色度权重"
+ *   变成了"HSV 的近似读数"。
+ *
+ * ⚠️ 这是**近似**，不是精确导出：真实渲染是**逐像素**按各自 H/S/V 变换的，
+ *   池心读数只是其中一个特例。⇒ 探针里凡依赖**绝对精度**的判据
+ *   都不该再用 tintR/G/B；要判池心实际色请走离屏渲染（`check-term-delta.cjs`）。
+ *   这条正是「像素级量具的 11 次失效」里第1 次的同款：
+ *   读引擎参数 ≠ 读画面。
+ */
+function hsvToTint(hsv) {
+  return hsvToRgb255(
+    BASE_POOL_HSV.h + hsv[0],
+    clamp01(BASE_POOL_HSV.s * hsv[1]),
+    clamp01(BASE_POOL_HSV.v * hsv[2]),
+  );
 }
 
 const clamp01 = (v) => (Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0);

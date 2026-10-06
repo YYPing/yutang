@@ -64,6 +64,7 @@
     "check:terms": "node tools/probe-terms.mjs",
     "check:terms:desktop": "node tools/verify-terms-desktop.cjs",
     "check:term:delta": "node tools/check-term-delta.cjs",
+    "check:lotus": "node tools/check-lotus.cjs",
     "check:frost": "node tools/check-frost-ui.cjs",
     "probe:desktop": "node tools/probe-desktop-boot.cjs",
     "check:daylight": "node tools/check-daylight.cjs"
