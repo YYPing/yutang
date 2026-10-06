@@ -2,6 +2,8 @@
 node_modules/
 dist/
 out/
+# 编辑前的手工备份（*.bak）。工具脚本会生成，容易误提交。
+*.bak
 release/
 work/
 .dist-old-*/
@@ -36,3 +38,7 @@ shot-yutang.cjs
 ui-desktop-test.cjs
 wallpaper-test.cjs
 启动桌面版.cmd
+# 一次性隔离定位脚本（2026-10-05 查「车胎荷叶」时临时写的）。
+# ⚠️ 它硬编码了 5191 端口 + 本机绝对路径，与仓库量具的 5188 / TERM_URL 约定不一致，
+#   且功能已被 tools/_zoom-leaf.cjs（单朵放大）与 tools/_flora-pano.cjs（1× 全景）覆盖。
+tools/_iso2.cjs

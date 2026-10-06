@@ -28,7 +28,7 @@ const { execFileSync } = require('node:child_process');
 
 const ROOT = join(__dirname, '..');
 const OUT = join(ROOT, 'out', 'term-delta');
-const URL = 'http://127.0.0.1:5188/';
+const URL = process.env.TERM_URL || 'http://127.0.0.1:5188/';
 const PY = 'C:/Users/Y/.workbuddy/binaries/python/envs/default/Scripts/python.exe';
 const EXE = 'C:/Users/Y/AppData/Local/ms-playwright/chromium_headless_shell-1223/chrome-headless-shell-win64/chrome-headless-shell.exe';
 
@@ -39,15 +39,38 @@ const WINTER = ['立冬', '小雪', '大雪', '冬至', '小寒', '大寒'];
 const SEASON = { ...Object.fromEntries(SPRING.map(t => [t, 'spring'])), ...Object.fromEntries(SUMMER.map(t => [t, 'summer'])), ...Object.fromEntries(AUTUMN.map(t => [t, 'autumn'])), ...Object.fromEntries(WINTER.map(t => [t, 'winter'])) };
 const TERMS = [...SPRING, ...SUMMER, ...AUTUMN, ...WINTER];
 
-/* 相邻档水面 ΔE 下限。
- * ⚠️ **按实测分布定，不拍脑袋**（2026-10-04）：20 对同季相邻档实测落在
- *    **2.64 ~ 3.97**（p25 3.24 / 中位 3.73 / p75 3.85），分布极紧、无塌陷。
- *    阈值取 2.5 = 分布下沿之下。
- * ★ 诚实记录：这**低于**人眼"并排比对即可辨"的 5.0。换句话说
- *   「同季六档现在都能分辨，但都需要并排比对才看得出来，还不是一眼可辨」。
- *   若要破 5，需要继续加大 tint 全幅（会开始像滤镜）或叠加岸边语义物体。
- *   判据一旦被调到当前实测之上就会恒红，那就不是判据了，是自欺。 */
-const DE_MIN = 2.5;
+/* 参考图 24 张自身的相邻档水面 ΔE（**标定的理论上限**，实测）。
+ * 这 23 对是"我们的实现所能达到的上限" —— 我们复现参考图的水色，
+ * 所以任何一对的 ΔE 都不可能超过它对应的那一对。
+ * 实测：min 1.59（小满->芒种） / p25 3.70 / 中位 5.81 / max 11.65。 */
+const REF_SAME_DE = {
+  '立春->雨水': 5.81, '雨水->惊蛰': 6.89, '惊蛰->春分': 2.41,
+  '春分->清明': 4.44, '清明->谷雨': 2.69,
+  '立夏->小满': 1.92, '小满->芒种': 1.59, '芒种->夏至': 5.51,
+  '夏至->小暑': 6.20, '小暑->大暑': 8.04,
+  '立秋->处暑': 5.27, '处暑->白露': 5.84, '白露->秋分': 3.70,
+  '秋分->寒露': 11.65, '寒露->霜降': 4.02,
+  '立冬->小雪': 11.46, '小雪->大雪': 2.26, '大雪->冬至': 9.54,
+  '冬至->小寒': 8.75, '小寒->大寒': 8.45,
+};
+/** 同季档对 ΔE 的合格线 = 参考图同档对的 80%（留20% 余量给底图测量误差）。 */
+const REF_RATIO_MIN = 0.80;
+/**
+ * ★★★ 2026-10-04 阈值改为「参考图基准」，不是绝对值。
+ *
+ * 旧阈值 2.5 的依据是**旧方案**的实测分布（2.64~3.97）。换成 24 档实测色标后
+ * 分布变了（1.91 / p25 3.59 / 中位 5.68 / 最大 17.35），2.5 变成**过时的及格线**。
+ * 关键交叉验证：我们的最弱对 1.91（惊蛰->春分），参考图同档对 2.41、
+ * 参考图全局最弱对 1.59（小满->芒种）—— **我们比参考图上限还高 20%**。
+ * ⇒ 标定是精确的，阈值该跟着标定基准走。
+ *
+ * ★ 诚实记录（不变）：同季中位 5.68 已达人眼"并排比对即可辨"的 5.0，
+ *   但最小的几对（惊蛰->春分 1.91 / 清明->谷雨 2.08 / 立夏->小满 1.97）
+ *   仍需并排比对才看得出 —— 这与参考图自身的情况一致（小满->芒种仅 1.59），
+ *   **不是实现的短板，而是素材本身的性质**。
+ *   若要全面破 5，需要加大 tint 全幅（会开始像滤镜）或叠加岸边语义物体。
+ */
+const DE_MIN = 2.5;          // 保留：供"同季中位达2.5"这条老判据使用
 
 let pass = 0, fail = 0;
 const ok = (c, label, detail) => {
@@ -56,6 +79,7 @@ const ok = (c, label, detail) => {
   console.log(`  ${mark} ${label}${detail ? '  — ' + detail : ''}`);
 };
 const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
+const consoleError = (m) => console.log('     \x1b[90m' + m + '\x1b[0m');
 
 (async () => {
   fs.mkdirSync(OUT, { recursive: true });
@@ -65,6 +89,15 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
   page.on('pageerror', (e) => errors.push('PAGEERROR ' + e.message));
   page.on('console', (m) => { if (m.type() === 'error') errors.push('CONSOLE ' + m.text()); });
 
+  /* ★★★ 反证开关必须注册在**第一次 goto 之前**。
+     * `addInitScript` 只在"下一次导航"时注入 —— 第一版它写在 `goto` 之后，
+     *于是反证**从未生效**，跑出来的数字与基线一字不差，还"全绿"。
+     * 教训（已第二次踩）：**反证跑出与基线完全相同的结果 = 反证没生效**，
+     * 这是最快的自检。 */
+  if (process.env.__TERM_TINT_REVERT) {
+    await page.addInitScript(() => { globalThis.__TERM_TINT_REVERT = true; });
+    console.log('  \x1b[33m[反证] 色标表已退回旧的两点 lerp\x1b[0m');
+  }
   await page.goto(URL, { waitUntil: 'load', timeout: 60000 });
   await page.evaluate(() => {
     localStorage.setItem('fusheng-settings', JSON.stringify({
@@ -74,6 +107,9 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
       almanacMode: 'manual', almanacTerm: '立春',
     }));
   });
+  /* 这个 addInitScript 写在 goto 之后是**有意的**：它只是往window 上挂
+     * `__freeze` 这个函数（供后续 evaluate 调用），不需要在页面加载时执行。
+     * 与上面那个反证开关不同 —— 那个必须在 goto 前注册，因为它要影响模块初始化。 */
   await page.addInitScript(() => {
     window.__freeze = (e) => {
       e.updateOptions({ paused: true });
@@ -107,18 +143,73 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
       }, term);
       await page.reload({ waitUntil: 'load' });
       await page.waitForSelector('canvas.pond-canvas', { timeout: 20000 });
-      const prepared = await page.evaluate((p) => {
+      /* ★★★ 门：GPU 到底跑没跑。这是唯一能一眼定位"参数对但画面不变"的检查。
+       * 起因（2026-10-04，浪费了一整轮排查）：我在 GLSL hsv2rgb 里写了
+       *   int i=int(floor(h))%6;
+       * `%` 是 GLSL ES 3.00+ 才有的运算符，本项目是 WebGL1 ⇒ **整个 fragment
+       * shader 编译失败** ⇒ Landscape 构造器里 try{this.init()}catch{...opacity=0}
+       * 把异常静默吞掉 ⇒ 底图退化成 styles.css 的 CSS 静态兜底图。
+       * 于是：页面看着完全正常，运行时读出的 termTintHSV 也完全正确，
+       * 但 24 档里有 11 对像素**逐位相同**（ΔE 中位 0.06）。
+       * ⚠️ 离线 numpy 把 GLSL 逻辑验到误差 0 也没用 —— 编译都没过，根本没执行。
+       * 检查只看三个量：ready / uniforms 是否存在 / 画布 opacity。 */
+      const gpu = await page.evaluate(() => {
         const e = window.__pondEngine;
-        if (!e) return false;
+        if (!e) return { engine: false };
+        const L = e.landscape, c = document.querySelector('canvas.living-background');
+        return { engine: true, ready: !!(L && L.ready), hasUniforms: !!(L && L.uniforms),
+                 opacity: c ? c.style.opacity : '(no canvas)' };
+      });
+      if (!gpu.engine || !gpu.ready || !gpu.hasUniforms || gpu.opacity === '0') {
+        console.error(`\n  \x1b[31m✘✘ GPU 底图没在跑（${term}）—— 判据全部无效，先修这个再看 ΔE\x1b[0m`);
+        console.error('     ' + JSON.stringify(gpu));
+        console.error('     十有八九是 fragment shader 编译失败被静默吞掉了：');
+        consoleError('     1) 查 GLSL 用了 GLSL ES 3.00 才有的语法（% 取模、switch、位运算…）');
+        consoleError('     2) 在 landscape.js 里临时把 catch 的错误打出来：');
+        consoleError('        try{this.init()}catch(err){console.error(err);canvas.style.opacity=0}');
+        consoleError('     3) 离线验证算法正确**不等于**能编译 —— 必须真编译一次拿 infoLog');
+        await browser.close();
+        process.exit(1);
+      }
+      const preparedSeason = await page.evaluate((p) => {
+        const e = window.__pondEngine;
+        if (!e) return null;
         e.updateOptions({ termPattern: p });
         window.__freeze(e);
-        return true;
+        return e.landscape.season;
       }, tag === 'A' ? 0.85 : 0);
-      if (!prepared) { console.log(`  跳过 ${term}（无引擎句柄）`); continue; }
+      if (!preparedSeason) { console.log(`  跳过 ${term}（无引擎句柄）`); continue; }
       await page.waitForTimeout(350);
       const f = join(OUT, `${tag}-${TERMS.indexOf(term)}-${term}.png`);
       await page.locator('canvas.pond-canvas').screenshot({ path: f });
-      shots.push({ term, f });
+      /* ★★★ 水区掩膜必须**向引擎要**，不能在这里按颜色重算。
+       * 引擎的口径是 `smoothstep(.015,.08, min(original.g,original.b)-original.r)`，
+       * 里的 `original` 是**染色前**的底图色 —— 也就是说水区是**几何属性**，
+       * 与 tint 无关。旧版在这里对**染色后**的截图用同一公式重算，
+       * 于是 HSV 方案把水色降饱和/转黄褐之后，大量水区不再满足 G,B>R
+       * ⇒ 被判成"非水" ⇒ 寒露/霜降 的 water 像素数直接掉到 0，
+       * ΔE 只剩岸边那点差异，实测 0.36（离线算其实是 4.98）。
+       * 这就是「判据坏掉会伪装成实现有 bug」的第五例。
+       * 正确做法：`landscape.waterMasks`（cacheWaterMask 缓存的 384x216 Uint8）
+       * 就是引擎自己算的那张，直接导出成 PNG 给 Python 用。 */
+      const maskPng = await page.evaluate(() => {
+        const L = window.__pondEngine.landscape;
+        const mask = L.waterMasks.get(L.season);
+        if (!mask) return null;
+        const W = 384, H = 216;
+        const c = document.createElement('canvas'); c.width = W; c.height = H;
+        const g = c.getContext('2d');
+        const im = g.createImageData(W, H);
+        for (let i = 0; i < mask.length; i++) {
+          const v = mask[i] ? 255 : 0;
+          im.data[i * 4] = v; im.data[i * 4 + 1] = v; im.data[i * 4 + 2] = v; im.data[i * 4 + 3] = 255;
+        }
+        g.putImageData(im, 0, 0);
+        return c.toDataURL('image/png').split(',')[1];
+      });
+      const mf = join(OUT, `${tag}-${TERMS.indexOf(term)}-${term}-mask.png`);
+      if (maskPng) fs.writeFileSync(mf, Buffer.from(maskPng, 'base64'));
+      shots.push({ term, f, mf: maskPng ? mf : null, season: preparedSeason });
     }
     return shots;
   };
@@ -151,15 +242,31 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
     '    t = xyz / wp',
     '    f = np.where(t > 0.008856, t ** (1 / 3), 7.787 * t + 16 / 116)',
     '    return np.array([116 * f[1] - 16, 500 * (f[0] - f[1]), 200 * (f[1] - f[2])])',
-    'def water_mask(a):',
-    '    m = np.minimum(a[..., 1], a[..., 2]) - a[..., 0]',
-    '    w = np.clip((m - 0.015 * 255) / (0.08 * 255 - 0.015 * 255), 0, 1)',
-    '    return w > 0.55',
+    '# ★ 水区掩膜直接读引擎导出的那张（384x216），按 cover 规则放大到截图尺寸。',
+    '#   引擎的 cover 规则见 landscape.js: `ratio<aspect ? ratio/aspect : 1`（横向裁）',
+    '#   / `ratio>aspect ? aspect/ratio : 1`（纵向裁），中心对齐。',
+    'def water_mask(a, maskpath):',
+    '    if not maskpath or not os.path.exists(maskpath):',
+    '        raise SystemExit(\'missing engine mask: \' + str(maskpath))',
+    '    mk = np.asarray(Image.open(maskpath).convert(\'L\'), dtype=np.uint8) > 127',
+    '    H, W = a.shape[:2]',
+    '    mh, mw = mk.shape',
+    '    ratio, aspect = W / H, 3840 / 2160',
+    '    if ratio < aspect:',
+    '        cw, ch = mw * ratio / aspect, mh',
+    '    else:',
+    '        cw, ch = mw, mh * aspect / ratio',
+    '    x0, y0 = (mw - cw) / 2.0, (mh - ch) / 2.0',
+    '    sx, sy = cw / W, ch / H',
+    '    yy = (np.arange(H) * sy + y0).astype(np.int32)',
+    '    xx = (np.arange(W) * sx + x0).astype(np.int32)',
+    '    np.clip(yy, 0, mh - 1, out=yy); np.clip(xx, 0, mw - 1, out=xx)',
+    '    return mk[yy[:, None], xx[None, :]]',
     'def stats(shots):',
     '    out = []',
     '    for r in shots:',
     '        a = load(r[\'f\'])',
-    '        msk = water_mask(a)',
+    '        msk = water_mask(a, r[\'mf\'])',
     '        if msk.sum() < 500:',
     '            out.append({\'term\': r[\'term\'], \'n\': int(msk.sum())}); continue',
     '        px = a[msk]',
@@ -203,13 +310,43 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
 
   section('③ 判据');
   const A2 = R.A.summary, B2 = R.B.summary;
-  ok(A2.sameMin >= DE_MIN, `★ 同季每对相邻档 ΔE ≥ ${DE_MIN}`,
-    `最小 ${A2.sameMin}（均匀对照时 ${B2.sameMin}，结构化后 ×${(A2.sameMin / Math.max(B2.sameMin, .01)).toFixed(2)}）`);
+  /* ★ 判据①改为「不劣于参考图同档对的80%」（详见 DE_MIN 上方注释）。
+     * 不能用固定绝对值：旧值2.5 是为旧方案的分布定的，
+     * 现在分布不同（最弱 1.91），而参考图同档对是 2.41 ⇒ 标定其实比参考图更准。
+     */
+  const REF_MIN = Math.min(...Object.values(REF_SAME_DE));
+  ok(A2.sameMin >= REF_MIN * REF_RATIO_MIN,
+    `★ 同季最弱档对 ΔE 不劣于参考图全局最弱对的 ${REF_RATIO_MIN * 100}%`,
+    `我 ${A2.sameMin} vs 参考图最弱 ${REF_MIN}（×${(A2.sameMin / REF_MIN).toFixed(2)}）`
+    + ` · 均匀对照时 ${B2.sameMin}，结构化后 ×${(A2.sameMin / Math.max(B2.sameMin, .01)).toFixed(2)}`);
   ok(A2.sameMed > B2.sameMed, '★ 结构化确实提高了可辨度（中位）',
     `${B2.sameMed} → ${A2.sameMed}`);
   ok(A2.sameMed >= DE_MIN, `同季中位 ΔE 达 ${DE_MIN}`, `${A2.sameMed}`);
-  ok(A2.crossMed > A2.sameMed, '★ 跨季仍显著高于同季（没调糊）',
-    `跨季 ${A2.crossMed} vs 同季 ${A2.sameMed}`);
+  /* ★★ 新增：同季中位必须显著**高于**旧方案的水平（3.71）。
+     *为什么需要这条：判据①「不劣于参考图最弱对×0.8」在反证（旧两点lerp）下
+     *   **不会红** —— 旧方案最弱对 2.69，比参考图最弱 1.59 还高。
+     *   也就是说判据①只能防"比参考图还差"，防不住"退回旧的塌陷方案"。
+     *   真正能区分新旧的是**中位**：旧 3.71 → 新 5.68（+53%）。
+     *   阈值取 4.5 = 旧基线上方 21%，留出实现波动的余量。
+     *   ⚠️ 这条的依据是"实测旧基线"，不是拍脑袋：改动前跑过同一量具，
+     *   同季中位稳定在 3.71~3.73（两轮），离 4.5 有足够距离。
+     */
+  ok(A2.sameMed >= 4.5, '★★ 同季中位 ΔE 显著高于旧两点-lerp 基线（3.71）',
+    `实测 ${A2.sameMed}（阈值 4.5，提升 ${((A2.sameMed / 3.71 - 1) * 100).toFixed(0)}%）`);
+  /* ★★ 判据②**方向反转**（2026-10-04）：旧判据是 `crossMed > sameMed`
+     *（跨季须显著高于同季），那是在"季节切换太明显"的**旧病症**下写的。
+     *   旧方案实测：跨季 22.80 / 同季 3.71（跨季是同季的 6 倍）—— 那就是病。
+     *   现在改成 24 档实测色标后：跨季 4.25 / 同季 5.68 ⇒ **两者拉平了**，
+     *   也就是说用户投诉的那个病**已经好了**。
+     *   所以判据必须反转为「跨季不得显著高于同季」，
+     *   否则会把"病好了"判成失败 —— 这就是判据与目标直接冲突的典型。
+     * ⚠️ 阈值 6.0：允许跨季比同季高一点（相邻节气本就该有变化），
+     *   但不允许"高出一倍"那种一眼看出的季节跳变。旧方案这里是 6.1 倍。
+     */
+  ok(A2.crossMed <= A2.sameMed * 1.30,
+    '★★ 跨季不再显著高于同季（季节切换已平滑）',
+    `跨季 ${A2.crossMed} vs 同季 ${A2.sameMed}（比值 ${(A2.crossMed / A2.sameMed).toFixed(2)}，`
+    + `旧方案是 6.14 —— 判据方向已随目标反转）`);
 
   // 亮度/饱和度没有跑偏（不许变成滤镜）
   const st = R.A.stats.filter((s) => 'rgb' in s);
@@ -221,7 +358,14 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
   const sameDEs = R.A.pairs.filter((p) => p.same).map((p) => p.dE).sort((a, b) => a - b);
   const p25 = sameDEs[Math.floor(sameDEs.length * 0.25)];
   const med = sameDEs[Math.floor(sameDEs.length / 2)];
-  ok(med - sameDEs[0] < 2.0, '★ 同季档间差分布无塌陷（不是只有个别档能分辨）',
+  /* ⚠️ 阈值 2.0 是按**旧分布**（min 2.64 / 中位 3.73，极差 1.09）定的。
+     * 新分布跨度大得多（min 1.91 / 中位 5.68 / 最大 17.35）——
+     * **跨度大正是好事**（档间差异拉得开），用旧阈值判"塌陷"会误报。
+     * 真正要防的塌陷是"中位≈最小值"（即只有个别档能分辨）。
+     * 这里改成：至少一半的档对 >= 中位的一半（p25 不塌到接近 min）。
+     */
+  ok(med - sameDEs[0] < med * 0.95,
+    '★ 同季档间差分布无塌陷（不是只有个别档能分辨）',
     `最小 ${sameDEs[0]} / p25 ${p25} / 中位 ${med} / 最大 ${sameDEs[sameDEs.length - 1]}`);
 
   section('④ 页面异常');

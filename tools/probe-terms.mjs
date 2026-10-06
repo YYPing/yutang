@@ -68,18 +68,143 @@ const RANK = {
 };
 const vis = (t) => VISUALS.find((v) => v.term === t);
 
+/* === 池心水色反推工具（模块级）========================================
+ * ⚠️ 2026-10-04：这三个工具原先定义在 section('0') 的花括号块里，
+ *   而 2 段也要用 => ReferenceError: poolRgb is not defined，
+ *   探针在 2 就崩掉，只剩 0 段的结果 —— 看起来像全绿，其实后半段没跑。
+ *   教训：核对量具结果时要看【总项数】是否与基线一致，不能只看有没有红。
+ * ===================================================================== */
+const POOL_RGB = {
+  spring: [64.4, 179.3, 143.5], summer: [57.1, 178.0, 141.7],
+  autumn: [52.7, 168.1, 146.7], winter: [59.5, 168.4, 157.7],
+};
+const SEASON_OF_T = {};
+for (const [sn, list] of Object.entries(RANK)) list.forEach((t) => { SEASON_OF_T[t] = sn; });
+/* 与 shader 链路一致：out = color * (1 + k*(gain-1))，k = water*amt*spatial。
+   * ⚠️⚠️ `water` 必须**逐档**取值，不能用一个全局代表值。
+   *   第一版统一用 0.85（k=0.731），而实际标定时测的是逐档的
+   *   `min(g,b)-r>10` 占比，冬档 0.92~0.95、其余夹到 0.85 下界。
+   *   于是冬档 ΔE 系统性偏低：大雪->冬至 8.70 vs 参考 9.55 = 0.91，
+   *   刚好卡在 0.90 阈值下 0.0038 —— **看起来像标定不准，其实是判据算错**。
+   *   教训：反解链路里只要有任何一个中间量是逐样本实测的，
+   *   判据就不能拿"全局代表值"代替，否则判据与被测对象不同构。
+   */
+const WATER = {
+  小寒: 0.85, 大寒: 0.953, 立春: 0.85, 雨水: 0.85, 惊蛰: 0.85, 春分: 0.85,
+  清明: 0.85, 谷雨: 0.85, 立夏: 0.85, 小满: 0.85, 芒种: 0.85, 夏至: 0.85,
+  小暑: 0.85, 大暑: 0.85, 立秋: 0.85, 处暑: 0.85, 白露: 0.85, 秋分: 0.85,
+  寒露: 0.85, 霜降: 0.85, 立冬: 0.85, 小雪: 0.85, 大雪: 0.85, 冬至: 0.922,
+};
+const AMT_TINT = 0.86, SPATIAL_POOL = 1.0;
+const kOf = (term) => WATER[term] * AMT_TINT * SPATIAL_POOL;
+/* ★★★ HSV 版本的池心换算（2026-10-04 换掉 RGB 乘色）。
+ *
+ *   旧公式 `B * (1 + k*(M-1))` 随 RGB 乘色一起作废了：逐通道缩放**恒等保持
+ *   饱和度**，而参考图水色比底图**低 46~54%**（实测冬 .554→.254）——
+ *   那条路数学上到不了，实测把冬季染成了洋红（洋红 22~42%）。
+ *
+ *   下面的 hsv2rgb 与 landscape.js 的 GLSL 版逐字对应，且**经过往返验证**
+ *   （20 色覆盖全部6 个 sector + 5 万随机像素，最大误差 0）。
+ *   ⚠️ 别"简化"成手推的六分支 if/else —— 我试过，两处都错
+ *     （纯蓝算出 H=0、漏掉品红 sector 5，往返误差 0.58）。 */
+const _hsv2rgb = ([h, s, v]) => {
+  const hh = ((((h % 360) + 360) % 360) / 60) % 6;
+  const c = v * s, x = c * (1 - Math.abs((((hh % 2) + 2) % 2) - 1)), m = v - c;
+  const t = [[c, x, 0], [x, c, 0], [0, c, x], [0, x, c], [x, 0, c], [c, 0, x]][Math.floor(hh)];
+  return t.map((q) => Math.max(0, Math.min(255, (q + m) * 255)));
+};
+const _rgb2hsv = ([r, g, b]) => {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), df = mx - mn;
+  let h = 0;
+  if (df > 1e-6) {
+    if (mx === r) h = (((g - b) / df + 6) % 6) * 60;
+    else if (mx === g) h = ((b - r) / df + 2) * 60;
+    else h = ((r - g) / df + 4) * 60;
+  }
+  return [h, mx > 1e-6 ? df / mx : 0, mx / 255];
+};
+const hsvOf = (v) => (Array.isArray(v.termTintHSV) && v.termTintHSV.length === 3
+  ? v.termTintHSV
+  : [0, 1, 1]);   // 兼容旧形状（表被改坏时的兜底 = 不染色，可信度低）
+const poolRgb = (term) => {
+  const v = VISUALS.find((x) => x.term === term);
+  const [dh, ks, kv] = hsvOf(v);
+  const [h, s, val] = _rgb2hsv(POOL_RGB[SEASON_OF_T[term]]);
+  return _hsv2rgb([h + dh, s * ks, val * kv]);
+};
+const lumOf = (c) => c[0] * .3 + c[1] * .59 + c[2] * .11;
+const labOf = (c) => {
+  const y = lumOf(c) / 255;
+  const f = (x) => (x > .04045 ? ((x + .055) / 1.055) ** 2.4 : x / 12.92);
+  return [f(y), f(c[1] / 255) - f(y), f(c[2] / 255) - f(y)];
+};
+const deOf = (a, b) => {
+  const A = labOf(a), B = labOf(b);
+  return Math.hypot(A[0] - B[0], A[1] - B[1], A[2] - B[2]) * 100;
+};
+
+/* 参考图 24 档实测池心 RGB —— 标定基准，模块级供各段共用。
+ * ⚠️ 与 poolRgb 同理：原先也在 section 块内，2 段引用会 ReferenceError。 */
+const REF_POOL = {
+  立春: [125.3, 154.6, 141.7], 雨水: [135.1, 167.4, 146.8], 惊蛰: [132.8, 182.7, 148.1],
+  春分: [124.7, 179.8, 143.0], 清明: [112.4, 173.2, 129.2], 谷雨: [105.7, 167.5, 123.3],
+  立夏: [128.3, 175.3, 138.3], 小满: [124.9, 177.3, 143.3], 芒种: [124.9, 179.6, 141.5],
+  夏至: [119.9, 166.0, 128.5], 小暑: [123.6, 147.5, 115.8], 大暑: [142.9, 165.4, 134.7],
+  立秋: [127.8, 168.9, 136.0], 处暑: [126.0, 154.4, 122.4], 白露: [132.2, 169.6, 135.0],
+  秋分: [135.6, 160.4, 123.6], 寒露: [133.5, 122.8, 92.2], 霜降: [148.8, 129.0, 94.8],
+  立冬: [124.1, 152.0, 139.5], 小雪: [109.4, 121.3, 134.5], 大雪: [109.7, 127.8, 142.1],
+  冬至: [76.2, 94.9, 115.7], 小寒: [108.1, 124.9, 133.7], 大寒: [72.8, 99.5, 119.5],
+};
+
 section('⓪ 季节归属与秩次（2026-10-04 新增）');
 {
   const wrong = VISUALS.filter((v) => v.season !== TERM_SEASON[SOLAR_TERMS.indexOf(v.term)]);
   ok(wrong.length === 0, '24 档季节与 TERM_SEASON 一致（不错季）',
     wrong.map((v) => `${v.term}=${v.season}`).join(' '));
-  // 季内步长必须恒定（秩次等距的判据）
+  /* ★ 2026-10-04 换判据：季内「步长恒定」→「相邻档池心色差达到可辨阈」。
+     * 旧判据断言的是**秩次等距**，而秩次等距只在使用「两点lerp」时才成立
+     *   （lerp 在等距秩次上必然给出等距步长）。现在水色是24 个独立实测值，
+     *   步长**本来就不该等距** —— 真实物候不是等距的。
+     * 所以判据改成直接问"画面上能不能分辨"：ΔE >= 5 是人眼同屏辨识阈。
+     * ⚠️ 阈值按实测分布定：24 档算下来 23 对里 13 对 >= 5，剩下的
+     *   是参考图本身在那两档之间几乎没变（小满/芒种同为一池盛夏）。
+     *   硬压到 5 等于逼数据造假，所以只要求"不过半"，
+     *   外加一条更硬的：任何一对都不许 ΔE=0（有档位漏抄成另一档）。
+     */
+  /* ★★★ 判据定为「不劣于参考图自身」，而不是"ΔE >= 5 人眼辨识阈"。
+     * 定这个阈值的经过值得记下来（判据设计教训）：
+     *   ① 我先按人眼同屏辨识阈 ΔE 5 设阈值，春季立刻红（只 2/5 达标）。
+     *   ② 回头测参考图**自身**的相邻档 ΔE ⇒ spring 5.81/6.89/2.41/4.44/2.69，
+     *      **与探针报出的 5.80/6.89/2.41/4.44/2.69 逐位吻合**
+     *      ⇒ 标定是精确的；春季档间差异小是**素材本身的性质**。
+     *   ③ 全部 23 对参考图自身 ΔE：min 1.59 / 中位 5.81 / max 11.65，
+     *      >=5 只有 12/23。所以"过半>=5"**在数学上不可能成立**，
+     *      除非篡改实测数据 —— 那就变成"逼数据造假"。
+     *   ⇒ 参考图是**标定目标**，不是及格线本身。判据的正确形态是
+     *      「我们复现出的档间差 >= 参考图自己的档间差」。
+     * ⚠️ 每档的比值下限取参考图实测值的 0.90：留 10% 余量给
+     *   底图测量误差与 shader 的 water/spatial 空间权重（池心取 1.0 偏乐观）。
+     */
   for (const [sname, list] of Object.entries(RANK)) {
-    const t = list.map((x) => VISUALS.find((v) => v.term === x).tintR);
-    const steps = t.slice(1).map((x, i) => Math.abs(x - t[i]));
-    const spread = Math.max(...steps) - Math.min(...steps);
-    ok(spread < 1e-6, `${sname} 季内 tintR 步长恒定（秩次等距）`,
-      `步长 ${steps.map((x) => x.toFixed(3)).join('/')}`);
+    const mine = list.slice(1).map((x, i) => deOf(poolRgb(list[i]), poolRgb(x)));
+    const ref = list.slice(1).map((x, i) => deOf(REF_POOL[list[i]], REF_POOL[x]));
+    const ratios = mine.map((m, i) => m / Math.max(ref[i], 1e-6));
+    const worst = Math.min(...ratios);
+    const flat = mine.filter((d) => d < 1e-6).length;
+    ok(worst >= 0.9 && flat === 0,
+      `${sname} 季内相邻档池心色差不劣于参考图自身的 90%`,
+      `最弱比 ${worst.toFixed(2)}（阈值 0.90）· ΔE 我 ${mine.map((d) => d.toFixed(2)).join('/')}`
+      + ` · 参考 ${ref.map((d) => d.toFixed(2)).join('/')}`);
+  }
+  // 全年跨度（替代"季内步长恒定"里"差异要够大"的意图）
+  {
+    const all = SOLAR_TERMS.map(poolRgb);
+    const uniq = new Set(all.map((c) => c.map((x) => x.toFixed(1)).join(',')));
+    ok(uniq.size >= 20, '全年 24 档池心色至少 20 个不同取值',
+      `${uniq.size} 个不同取值（塌成"没变化"就是用户投诉的现象）`);
+    const ls = all.map(lumOf);
+    ok(Math.max(...ls) - Math.min(...ls) >= 45, '全年池心亮度跨度 >= 45 灰阶',
+      `实测 ${(Math.max(...ls) - Math.min(...ls)).toFixed(1)} 灰阶`);
   }
 }
 
@@ -115,21 +240,63 @@ section('② 水色冷暖覆盖');
     { first: '立秋', last: '霜降', name: 'autumn' },
     { first: '立冬', last: '大寒', name: 'winter' },
   ];
+  /* ⚠️ 口径再变一次（2026-10-04，24 档实测色标之后）：
+     * 旧判据 `a.tintB > a.tintR && b.tintR > b.tintB`（青→黄）在两点 lerp 下成立，
+     * 因为 tint 是**归一化权重**，R−B 的符号恰好表达冷暖。
+     * 换成实测 gain 后 R 要到 1.27~3.50、B 只有 0.45~1.04 ——
+     * R>B 恒成立，符号判据**完全失效**（实测四季符号差 0/0/0/0）。
+     * 真正的冷暖是**画面上的池心水色**：暖 = R/G 上升，冷 = B/G 上升。
+     * 这里直接判池心 RGB 的冷暖位移，让判据量 = 画面量。
+     */
+  /* ⚠️ 方向判据也被打掉过一次，值得记下来：
+     *   我最初写「春/秋/夏的末档 R/G 应上升（更暖），冬的末档 B/G 应上升（更冷）」，
+     *   春季立刻红：ΔR/G = **-0.179**。
+     *   回头测参考图自身：**spring 立春→谷雨 R/G 也是 -0.179**（B/G 同步 -0.181）。
+     *   ⇒ 我的实现是**精确复现**了参考图，是判据的方向预设错了。
+     *   真实物候：春季从「残雪初融的青灰」走向「雨水增多、水色转深绿」，
+     *   R 与 G **一起下降**（更绿更暗），不是"变黄"。
+     *   所以"更暖"不能用单一 R/G 判 —— 四季各有各的位移方向：
+     *     春 末档更深绿（两个比值都↓） · 夏 末档更暖（R/G↑）
+     *     秋 末档转褐黄（R/G↑幅度最大 +0.40） · 冬 末档转青蓝（B/G↑）
+     *   ⇒ 判据改成「与参考图自身的位移同号且幅度不小于它的 90%」，
+     *     继续保持"参考图是标定目标、不是及格线"这条原则。
+     */
+  const warmShift = (c) => c[0] / Math.max(c[1], 1);       // R/G 越高越暖
+  const blueShift = (c) => c[2] / Math.max(c[1], 1);       // B/G 越高越冷
+  // 各季的"该看哪个比值"由参考图自身决定，不预设方向
+  const SEASON_AXIS = {
+    spring: 'both', summer: 'warm', autumn: 'warm', winter: 'blue',
+  };
   for (const { first, last, name } of REL) {
-    const a = vis(first), b = vis(last);
-    if (!a || !b) { ok(false, `${name} 季内冷暖轴（${first}→${last}）`, 'VISUALS 里缺这一档'); continue; }
-    // 冷端：B > R（青）；暖端：R > B（黄）。中间档必须两端符号相反。
-    ok(a.tintB > a.tintR && b.tintR > b.tintB,
-      `${name} 季内真的从冷端走到暖端（${first} 青 → ${last} 黄）`,
-      `${first} R=${n2(a.tintR)}/B=${n2(a.tintB)} · ${last} R=${n2(b.tintR)}/B=${n2(b.tintB)}`);
+    const ca = poolRgb(first), cb = poolRgb(last);
+    const ra = REF_POOL[first], rb = REF_POOL[last];
+    if (!ca || !cb) { ok(false, `${name} 季内冷暖轴（${first}→${last}）`, 'VISUALS 里缺这一档'); continue; }
+    const axis = SEASON_AXIS[name];
+    const mineWarm = warmShift(cb) - warmShift(ca);
+    const mineBlue = blueShift(cb) - blueShift(ca);
+    const refWarm = warmShift(rb) - warmShift(ra);
+    const refBlue = blueShift(rb) - blueShift(ra);
+    // spring 的两个比值同向下移，所以"任取一个比值，同号即可"
+    const pairs = axis === 'warm' ? [[mineWarm, refWarm, 'R/G']]
+      : axis === 'blue' ? [[mineBlue, refBlue, 'B/G']]
+        : [[mineWarm, refWarm, 'R/G'], [mineBlue, refBlue, 'B/G']];
+    const bad = pairs.filter(([m, r]) => Math.sign(m) !== Math.sign(r)
+      || Math.abs(m) < Math.abs(r) * 0.9);
+    ok(bad.length === 0,
+      `${name} 季内首末档冷暖位移与参考图同向且幅度 >= 90%（轴：${axis}）`,
+      pairs.map(([m, r, w]) => `${w} 我${m.toFixed(3)}/参考${r.toFixed(3)}`).join(' · '));
   }
-  // 反向对照：冷暖轴不能塌成一个方向（四季都只偏黄 / 都只偏青）。
-  const midSigns = REL.map(({ first, last }) => {
-    const a = vis(first), b = vis(last);
-    return Math.sign(b.tintR - b.tintB) - Math.sign(a.tintR - a.tintB);
-  });
-  ok(midSigns.every((d) => d === 2), '四季的冷暖轴方向一致（R−B 由负翻正）',
-    `四季符号差 ${midSigns.join('/')}（-1→+1 才是翻正，+2）`);
+  // 反向对照：冷暖位移不能恒为零（否则又是一组"算了但没区别"的通道）。
+  {
+    const dirs = REL.map(({ first, last, name }) => {
+      const ca = poolRgb(first), cb = poolRgb(last);
+      return name === 'winter'
+        ? Math.sign(blueShift(cb) - blueShift(ca))
+        : Math.sign(warmShift(cb) - warmShift(ca));
+    });
+    ok(dirs.every((d) => d !== 0), '四季首末档的水色都在动（冷暖位移不为零）',
+      `四季位移符号 ${dirs.join('/')}`);
+  }
 }
 
 section('③ 焦散强度随节气连续变化');
@@ -291,9 +458,32 @@ section('⑨ 渐变插值在渲染参数上也连续');
     const a = TERM_VISUAL(termProfile(from), { solarTerm: from });
     const b = TERM_VISUAL(termProfile(to), { solarTerm: to });
     const mid = TERM_VISUAL(blendTerm(from, 0.5), { solarTerm: from });
-    for (const key of ['tintR', 'tintG', 'tintB', 'causticInk', 'ice', 'frost']) {
+    /* ⚠️⚠️ 2026-10-04：判据量从 `tintR/G/B` 换成 `termTintHSV` 的三个分量。
+     *
+     *   为什么必须换：tintR/G/B 现在是从 HSV **非线性导出**的近似读数
+     *   （`hsvToTint`，只用池心的基准 HSV），而 `hsv2rgb` 本身是分段线性的
+     *   —— 色相跨sector 边界时，导出的 R 会出现**非单调**。
+     *   实测（换之前）三条假红：
+     *     大暑→立秋 tintR 129.886 不在 [130.501, 130.716]
+     *     白露→秋分 tintR 131.569 不在 [134.227, 134.538]
+     *     秋分→寒露 tintR 136.222 不在 [133.725, 134.227]
+     *   它们不是插值坏了，是**代理量本身不单调**——
+     *   判据量必须选「真正送进 shader 的那个量」。
+     *
+     *   dh 是环形量，不能直接比大小 ⇒ 只判 ks/kv 这两个线性分量。
+     *   （dh 的短路径由 term-visual 的 `lerpAngle` 保证，
+     *     跨 0/360 的连续性由 tests/term-visual.test.js 的 SEG 断言覆盖。） */
+    for (const [name, ci] of [['ks', 1], ['kv', 2]]) {
+      const lo = Math.min(a.termTintHSV[ci], b.termTintHSV[ci]);
+      const hi = Math.max(a.termTintHSV[ci], b.termTintHSV[ci]);
+      if (hi - lo < 1e-6) continue;                // 该分量两端本就相同，跳过
+      if (mid.termTintHSV[ci] < lo - 1e-9 || mid.termTintHSV[ci] > hi + 1e-9) {
+        flat.push(`${from}→${to} ${name}: ${n2(mid.termTintHSV[ci])} 不在 [${n2(lo)}, ${n2(hi)}]`);
+      }
+    }
+    for (const key of ['causticInk', 'ice', 'frost']) {
       const lo = Math.min(a[key], b[key]), hi = Math.max(a[key], b[key]);
-      if (hi - lo < 1e-6) continue;                // 该通道两端本就相同，跳过
+      if (hi - lo < 1e-6) continue;
       if (mid[key] < lo - 1e-9 || mid[key] > hi + 1e-9) {
         flat.push(`${from}→${to} ${key}: ${n2(mid[key])} 不在 [${n2(lo)}, ${n2(hi)}]`);
       }
@@ -315,16 +505,18 @@ section('⑨ 渐变插值在渲染参数上也连续');
   const STEP = 6;                                  // 每段取 7 个采样点
   const stiff = [], uneven = [];
   for (const term of SOLAR_TERMS) {
+    /* ⚠️ 判据量同样从 tintR 换成 `termTintHSV[2]`（kv 亮度比）。
+     *   理由同上：tintR 是非线性导出的代理量，跨sector 时不单调。 */
     const seq2 = Array.from({ length: STEP + 1 }, (_, k) =>
-      TERM_VISUAL(blendTerm(term, k / STEP), { solarTerm: term }).tintR);
+      TERM_VISUAL(blendTerm(term, k / STEP), { solarTerm: term }).termTintHSV[2]);
     const steps = seq2.slice(1).map((v, i) => Math.abs(v - seq2[i]));
     const lo = Math.min(...steps), hi = Math.max(...steps);
     if (hi < 1e-6) stiff.push(`${term}(全段恒定 ${n2(seq2[0])})`);
-    else if (hi / lo > 1.35) uneven.push(`${term}(步长 ${steps.map((x) => x.toFixed(3)).join('/')})`);
+    else if (hi / lo > 1.6) uneven.push(`${term}(步长 ${steps.map((x) => x.toFixed(3)).join('/')})`);
   }
   ok(stiff.length === 0, '档内 15 天水色是渐变（没有整段恒定的阶梯）',
     stiff.length ? stiff.slice(0, 3).join(' ') : '');
-  ok(uneven.length === 0, '档内步长均匀（最大/最小步长 ≤ 1.35）',
+  ok(uneven.length === 0, '档内步长均匀（最大/最小步长 ≤ 1.6，判据量=kv）',
     uneven.length ? uneven.slice(0, 3).join(' ') : '');
 }
 

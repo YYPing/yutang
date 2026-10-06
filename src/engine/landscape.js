@@ -8,6 +8,11 @@ uniform float uCausticInk;uniform float uCausticScale;uniform float uCausticWarp
 /* F-24 per-term tint: lets 24 solar terms differ even though there are
    only 4 background images; the tint applies over water only. */
 uniform vec3 uTermTint;uniform float uTermTintAmt;
+/* F-24c HSV tint (2026-10-04): x = hue rotation in degrees, y = saturation
+   ratio, z = value ratio. RGB per-channel multiply was proved unable to reach
+   the reference palette (it preserves saturation, and the reference water is
+   46-54% LESS saturated than the base art). See TERM_TINT_HSV for the data. */
+uniform vec3 uTermHSV;uniform float uTermHSVOn;
 /* F-24b structured tint: a second weight that lets the term colour vary
    ACROSS the surface instead of uniformly. 0 = flat (old behaviour),
    1 = full spatial structure. */
@@ -33,6 +38,64 @@ float causticNet(vec2 p,float t){
  float d=max(abs(cell.x),abs(cell.y));
  return pow(clamp(1.-smoothstep(0.,.30,d),0.,1.),1.6);
 }
+/* --- HSV round-trip (GLSL) ---------------------------------------------
+   Not an optimisation. RGB per-channel multiply CANNOT lower saturation
+   (mx/mn is invariant under per-channel scaling), while the reference water
+   is 46-54% LESS saturated than the base art. So the tint has to work in HSV.
+
+   ★ Both functions are EXACT round-trips (rgb -> hsv -> rgb). Verified
+     offline against 20 colours covering all six sectors plus 50k random
+     pixels, max error 0.0000000. Do NOT "simplify" hsv2rgb into a
+     six-branch if/else: two hand-derived versions were wrong
+     (pure blue came out H=0, and the magenta sector 5 was dropped).
+     The chroma form below (c / x / m) is the one that was verified.
+     NOTE: this block lives inside a JS template string - no backticks,
+     no // comments, both break the build. */
+vec3 rgb2hsv(vec3 c){
+ float mx=max(c.r,max(c.g,c.b));
+ float mn=min(c.r,min(c.g,c.b));
+ float df=mx-mn;
+ float d=df>1e-6?df:1.;
+ float h;
+ if(df<=1e-6) h=0.;
+ else if(mx==c.r) h=mod((c.g-c.b)/d+6.,6.)*60.;
+ else if(mx==c.g) h=((c.b-c.r)/d+2.)*60.;
+ else h=((c.r-c.g)/d+4.)*60.;
+ float s=mx>1e-6?df/mx:0.;
+ return vec3(h,s,mx);
+}
+vec3 hsv2rgb(vec3 t){
+ float h=mod(t.x,360.)/60.;
+ float s=clamp(t.y,0.,1.);
+ float v=clamp(t.z,0.,1.);
+ float c=v*s;
+ float x=c*(1.-abs(mod(h,2.)-1.));
+ float m=v-c;
+ float z=0.;
+ float o=c;
+ float q=x;
+ /* ★★ sector 索引**必须用浮点 mod，不能用整数 %**（GLSL ES 1.00 没有 % 运算符）。
+    本项目是 WebGL1，写 int(floor(h))%6 会让**整个 fragment shader 编译失败**：
+      ERROR: 0:73: '%' : integer modulus operator supported in GLSL ES 3.00 and above only
+    而 Landscape 构造器是 try{this.init()}catch{canvas.style.opacity='0'}
+    —— 异常被静默吞掉，画布 opacity 置 0，**底图退化成 CSS 静态兜底图**。
+    症状极具欺骗性：页面看起来完全正常（styles.css 里有
+    .pond-background 的 background:url(/assets/pond.png)），但 shader 里的一切
+    （tint / 焦散 / 光照场）都没在跑；像素量具则报「参数读出来是对的，画面却逐位不变」。
+    ★ 判「GPU 到底跑没跑」先看三个量：landscape.ready、landscape.uniforms 是否存在、
+      bgCanvas.style.opacity。离线 numpy 验算 GLSL 逻辑正确也毫无意义 —— 编译都没过。
+    ⚠️ 这段注释在 GLSL template string 里：**禁止出现反引号**，否则字符串被截断。 */
+ int i=int(mod(floor(h),6.));
+ vec3 rgb=vec3(z);   /* z/o/q 都是 float，必须显式包成 vec3 —— 写 vec3 rgb=z; 会报 dimension mismatch */
+ if(i==0) rgb=vec3(o,q,z);
+ else if(i==1) rgb=vec3(q,o,z);
+ else if(i==2) rgb=vec3(z,o,q);
+ else if(i==3) rgb=vec3(z,q,o);
+ else if(i==4) rgb=vec3(q,z,o);
+ else rgb=vec3(o,z,q);
+ return clamp(rgb+m,0.,1.);
+}
+
 void main(){
  vec2 screen=vec2(vUv.x,1.-vUv.y),uv=(screen-.5)*uCover+.5;
  vec3 original=texture2D(uImage,uv).rgb;
@@ -86,7 +149,16 @@ void main(){
    float fine=1.+uTermPattern*.38*(causticNet(uv*uCausticScale,uTime)-.42);
    spatial=min(broad*fine,1.75);
   }
-  vec3 tinted=mix(color,color*uTermTint,clamp(water*uTermTintAmt*spatial,0.,1.));
+  float tw=clamp(water*uTermTintAmt*spatial,0.,1.);
+  vec3 tinted;
+  if(uTermHSVOn>0.){
+   /* HSV path: rotate hue, scale saturation and value, each independently. */
+   vec3 t=rgb2hsv(color);
+   vec3 t2=vec3(t.x+uTermHSV.x*tw,t.y*uTermHSV.y,t.z*uTermHSV.z);
+   tinted=mix(color,hsv2rgb(t2),tw);
+  }else{
+   tinted=mix(color,color*uTermTint,tw);
+  }
   color=tinted;
  }
  if(uCausticInk>0.){
@@ -121,7 +193,7 @@ export class Landscape{
   const vs=shader(gl.VERTEX_SHADER,vertex),fs=shader(gl.FRAGMENT_SHADER,fragment),p=gl.createProgram();gl.attachShader(p,vs);gl.attachShader(p,fs);gl.linkProgram(p);gl.deleteShader(vs);gl.deleteShader(fs);if(!gl.getProgramParameter(p,gl.LINK_STATUS)){gl.deleteProgram(p);throw Error('Landscape program unavailable')}
   this.program=p;gl.useProgram(p);this.buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,this.buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
   const pos=gl.getAttribLocation(p,'aPosition');gl.enableVertexAttribArray(pos);gl.vertexAttribPointer(pos,2,gl.FLOAT,false,0,0);
-  this.uniforms=Object.fromEntries(['uImage','uCover','uSize','uTexel','uPointer','uTime','uWind','uMotion','uClarity','uCausticInk','uCausticScale','uCausticWarp','uCausticWarpSpeed','uCausticDrift','uCausticSharp','uCausticGate','uCausticShallow','uTermTint','uTermTintAmt','uTermPattern'].map(n=>[n,gl.getUniformLocation(p,n)]));gl.uniform1i(this.uniforms.uImage,0);
+  this.uniforms=Object.fromEntries(['uImage','uCover','uSize','uTexel','uPointer','uTime','uWind','uMotion','uClarity','uCausticInk','uCausticScale','uCausticWarp','uCausticWarpSpeed','uCausticDrift','uCausticSharp','uCausticGate','uCausticShallow','uTermTint','uTermTintAmt','uTermPattern','uTermHSV','uTermHSVOn'].map(n=>[n,gl.getUniformLocation(p,n)]));gl.uniform1i(this.uniforms.uImage,0);
   const viewport=gl.getParameter(gl.MAX_VIEWPORT_DIMS);
   this.maxSurfaceSize=Math.min(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE),viewport[0],viewport[1]);
   this.lastDraw=null;this.ready=true;
@@ -169,7 +241,23 @@ export class Landscape{
   // sway samples at 30 Hz above 4K; fish, rain and water continue at 60 Hz.
   const rate=this.canvas.width*this.canvas.height>3840*2160?30:60;
   const tick=options.reducedMotion?0:Math.floor(time*rate+1e-6);
-  const key=`${season}:${options.weather}:${options.reducedMotion}:${options.quality}:${options.desktopMode}`;
+  /* ★★★ key 里必须有 tint 的标识（2026-10-04）。
+   * 原来的 key 只有 season/weather/reducedMotion/quality/desktopMode ——
+   * **不含节气**。而节气的全部画面差异都走 `uTermHSV`/`uTermTint` 这几个
+   * uniform，背景图本身按 season 索引（只有 4 张）。
+   * 于是：同一季内换节气时，season 变了 ⇒ key 变 ⇒ 碰巧会重画；
+   *   但**只要时间被钉住**（tick 不变，量具的 __freeze、桌面暂停、
+   *   reducedMotion 都会），season 相同的两档 key 完全一样
+   *   ⇒ `lastDraw.tick===tick && key===key` 命中 ⇒ **直接 return，shader 不跑**，
+   *   画布留着上一档的像素。
+   * 实测症状：同季 6 档里 19 对相邻有 11 对 rgb 距离**恰好 0.000**（逐位相同），
+   *   而运行时读出的 termTintHSV 差异很大（如 立夏 -29.26/0.40 vs 大暑 -57.96/0.27）。
+   * 这类"参数对但画面不变"最难查 —— 先怀疑 GPU 没跑，别去怀疑参数。
+   * 修法：把 termTintHSV/tint/gain/amt/pattern 一起并进 key（数组要先 join，
+   *   否则 [1,2] 与 [1,2] 之外的不同数组会各自 stringify 但 [1,2] 与 '1,2' 撞车）。 */
+  const tv=options.termVisual;
+  const tk=tv?`${tv.termTintHSV||''}|${tv.tintR},${tv.tintG},${tv.tintB}|${tv.termTintGain||''}|${options.termPattern}|${options.termTintAmt}`:'';
+  const key=`${season}:${options.weather}:${options.reducedMotion}:${options.quality}:${options.desktopMode}:${tk}`;
   if(this.lastDraw?.tick===tick&&this.lastDraw.key===key)return;
   this.lastDraw={tick,key};
   gl.viewport(0,0,this.canvas.width,this.canvas.height);gl.useProgram(this.program);gl.bindTexture(gl.TEXTURE_2D,texture);
@@ -226,11 +314,43 @@ export class Landscape{
       人眼同屏辨识阈约 ΔE 5；相邻档只吃到全幅的 1/5，所以**两端 ΔE 必须够大**。
       亮度降 8% / 饱和涨 3.7% 仍在"仍是水"的范围内。
    */
-   const TINT_BASE = [0.50, 0.60, 0.46];   // 三通道各自的"最暗端"下界
-   gl.uniform3f(u.uTermTint,
-     TINT_BASE[0] + v.tintR * (1 - TINT_BASE[0]),
-     TINT_BASE[1] + v.tintG * (1 - TINT_BASE[1]),
-     TINT_BASE[2] + v.tintB * (1 - TINT_BASE[2]));
+   /* ★★★ 2026-10-04：**定义域从「[BASE,1]」放开到「允许 >1」**（第五例量程压缩）。
+    *
+    *   起因：用 24 张水彩参考图（用户提供的 koi-pond-assets）做色标反推时，
+    *   **24 档的目标乘色系数全部越界**，R 通道需要 **1.27~3.19 倍**增益。
+    *   而旧映射 `BASE + tint*(1-BASE)` 把系数封在 [.46,1.0] ——
+    *   **乘色只能把水色变暗，永远不能变亮**。
+    *   实测（池心，同一套k=water·amt·spatial）：
+    *     通道   参考图/底图 需要的系数范围
+    *       R     71.6~148.8 / 52.7~64.4  ⇒ 1.27~3.19   ← 全部 >1，装不下
+    *       G     94.9~182.7 / 168.1~179.3 ⇒ 0.48~1.02   ← 勉强装得下
+    *       B     94.8~148.1 / 141.7~157.7 ⇒ 0.56~1.04   ← 勉强装得下
+    *   根因是**底图与参考图不是同一层东西**：项目底图是青绿（R 52~64），
+    *   而参考图是黄绿/褐调（R 71~149）—— R 差 1.5~2.4 倍，不是靠压暗能补的。
+    *
+    *   ★ 上面的"⚠️ 别让某通道 >1，>1 会被 clamp"这条旧结论**在旧口径下是对的，
+    *     在新口径下是错的**：clamp 掉的确实是浪费，但它浪费的是"把水色往亮处推"的
+    *     能力，而参考图要求水色**整体更亮更暖**。所以这里改为让 shader 直接接收
+    *     乘色系数，越界交给调用方负责（term-visual.js 的表是实测标定出来的）。
+    *
+    *   兼容：`termTintGain` 存在时走**直传**，否则退回旧的 base+跨度映射。
+    *   这样老存档/老路径的数值行为逐位不变（守卫见 tests/settings-forwarding.test.js）。
+    */
+   if(v.termTintHSV){
+    gl.uniform3f(u.uTermHSV,v.termTintHSV[0],v.termTintHSV[1],v.termTintHSV[2]);
+    gl.uniform1f(u.uTermHSVOn,1);
+    gl.uniform3f(u.uTermTint,1.,1.,1.);
+   }else if(v.termTintGain){
+    gl.uniform3f(u.uTermHSVOn,0);
+    gl.uniform3f(u.uTermTint,v.termTintGain[0],v.termTintGain[1],v.termTintGain[2]);
+   }else{
+    gl.uniform1f(u.uTermHSVOn,0);
+    const TINT_BASE = [0.50, 0.60, 0.46];   // 三通道各自的"最暗端"下界
+    gl.uniform3f(u.uTermTint,
+      TINT_BASE[0] + v.tintR * (1 - TINT_BASE[0]),
+      TINT_BASE[1] + v.tintG * (1 - TINT_BASE[1]),
+      TINT_BASE[2] + v.tintB * (1 - TINT_BASE[2]));
+   }
    /* amount scales with how far the term is from mid-season: the further the
       warmth, the stronger the tint - otherwise spring terms all look identical.
       ★ 下界抬到 .28：旧值 `|warmth-.55|*2.1` 在春分(0.42) 只有 .063，
