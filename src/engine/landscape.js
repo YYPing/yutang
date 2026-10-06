@@ -1,6 +1,10 @@
 import {windStrength} from './atmosphere.js';
 import {landscapeDimensions} from './rendering.js';
 import {CAUSTIC} from './light-field.js';
+import {SOLAR_TERMS,TERM_SEASON} from './almanac.js';
+import {resolveTermImage,termImageURL,allTermImages} from './term-images.js';
+/* 相邻节气的底图交叉淡入时长（秒）。需求 §2.3 第 5 条给的是 8s。 */
+export const TERM_FADE_SECONDS=8;
 const vertex=`attribute vec2 aPosition;varying vec2 vUv;void main(){vUv=(aPosition+1.0)*.5;gl_Position=vec4(aPosition,0.,1.);}`;
 const fragment=`precision highp float;
 uniform sampler2D uImage;uniform vec2 uCover;uniform vec2 uSize;uniform vec2 uTexel;uniform vec3 uPointer;uniform float uTime;uniform float uWind;uniform float uMotion;uniform float uClarity;
@@ -17,7 +21,13 @@ uniform vec3 uTermHSV;uniform float uTermHSVOn;
    ACROSS the surface instead of uniformly. 0 = flat (old behaviour),
    1 = full spatial structure. */
 uniform float uTermPattern;
+/* F-24d 8s cross-fade between the two background images of adjacent terms.
+   uImage is the outgoing image, uImageB the incoming one, uFade 0 -> 1.
+   One pass only: a CPU-side pre-blend would re-upload 3840x2160 every frame.
+   NOTE this lives inside a JS template string: no backticks, no // comments. */
+uniform sampler2D uImageB;uniform float uFade;
 varying vec2 vUv;
+vec3 bgSample(vec2 p){return mix(texture2D(uImage,p).rgb,texture2D(uImageB,p).rgb,uFade);}
 float oval(vec2 p,vec2 c,vec2 s){return 1.-smoothstep(.55,1.,length((p-c)/s));}
 /* Water-surface caustic net (F-10.5 companion).
    Domain-warped periodic grid: fract() makes cell COUNT a real control.
@@ -98,7 +108,7 @@ vec3 hsv2rgb(vec3 t){
 
 void main(){
  vec2 screen=vec2(vUv.x,1.-vUv.y),uv=(screen-.5)*uCover+.5;
- vec3 original=texture2D(uImage,uv).rgb;
+ vec3 original=bgSample(uv).rgb;
  // Animate only saturated leaf/blade pixels inside local rooted plant patches.
  float water=smoothstep(.015,.08,min(original.g,original.b)-original.r);
  float chroma=max(original.r,original.g)-original.b;
@@ -116,7 +126,7 @@ void main(){
  float nearHand=(1.-smoothstep(0.,110.,length(pointDelta)))*uPointer.z;
  vec2 bend=vec2(gust*(1.7+uWind*1.5)+nearHand*sign(pointDelta.x)*2.8,sin(uTime*.7+uv.x*18.)*.65);
  vec2 sampleUv=clamp(uv+bend/uSize*uCover*foliage*uMotion,vec2(.0001),vec2(.9999));
- vec3 color=texture2D(uImage,sampleUv).rgb;
+ vec3 color=bgSample(sampleUv).rgb;
  /* Caustic net: light is added, never subtracted, and only where the mask says water.
     Shallow edges get a brighter/denser mesh; deep centre stays quiet so the
     F-10.5 "dark corner .67" measurement does not move. */
@@ -172,7 +182,7 @@ void main(){
  // scaling; it does not invent texture detail. Clamp it to prevent bright halos.
  if(uClarity>0.){
   vec2 dx=vec2(uTexel.x*1.6,0.),dy=vec2(0.,uTexel.y*1.6);
-  vec3 neighbors=(texture2D(uImage,sampleUv-dx).rgb+texture2D(uImage,sampleUv+dx).rgb+texture2D(uImage,sampleUv-dy).rgb+texture2D(uImage,sampleUv+dy).rgb)*.25;
+  vec3 neighbors=(bgSample(sampleUv-dx)+bgSample(sampleUv+dx)+bgSample(sampleUv-dy)+bgSample(sampleUv+dy))*.25;
   color+=clamp((color-neighbors)*uClarity,vec3(-.018),vec3(.018));
  }
  gl_FragColor=vec4(clamp(color,0.,1.),1.);
@@ -180,12 +190,29 @@ void main(){
 /** Stable illustration with small, rooted, color-masked leaf motion. Water waves are a separate layer. */
 export class Landscape{
  constructor(canvas){
-  this.canvas=canvas;this.images=new Map();this.textures=new Map();this.waterMasks=new Map();this.dead=false;this.ready=false;
+  this.canvas=canvas;this.images=new Map();this.textures=new Map();this.waterMasks=new Map();this.dead=false;this.ready=false;this.season=null;this.slot=null;this.fadeFrom=null;this.fadeStart=0;this.pendingSeason=null;this.shownSeason=null;
   if(!canvas)return;
-  this.lost=e=>{e.preventDefault();this.ready=false;this.lastDraw=null;canvas.style.opacity='0';this.textures.clear()};
-  this.restored=()=>{try{this.init();this.season=null}catch{this.ready=false}};
+  this.lost=e=>{e.preventDefault();this.ready=false;this.lastDraw=null;canvas.style.opacity='0';this.textures.clear();this.fadeFrom=null;this.pendingSeason=null;this.shownSeason=null};
+  this.restored=()=>{try{this.init();this.season=null;this.shownSeason=null;this.fadeFrom=null}catch{this.ready=false}};
   canvas.addEventListener('webglcontextlost',this.lost);canvas.addEventListener('webglcontextrestored',this.restored);
   try{this.init()}catch{canvas.style.opacity='0'}
+  /* ★★ 预加载另外三张季节底图（构造即开始，不阻塞首帧）。
+   * 8s 交叉淡入的**硬前提**是「切档那一帧两张图都已在显存里」。
+   * 而 `texture()` 只在 `render()` 里被调用 ⇒ 不预热的话，
+   * 进程生命周期内**第一次**跨季必然是「新图现加载」——
+   * 实测 4 张 png 各 11~12MB，冷启动下载+解码就要几百 ms，
+   * 那时 `texture()` 返回 null ⇒ 早退 ⇒ 淡入退化为硬切（本帧最需要它）。
+   * 之后要等**下一次**跨季才可能凑齐两张 —— 也就是说一年四季里，
+   * 第一个跨季节点永远是硬切，这正是「8s 淡入看起来没生效」的成因。
+   * 预热后淡入在第一次跨季就成立。
+   * ⚠️ 只在 init 成功后做：shader 没编译起来时预热毫无意义。
+   * ★★★ 2026-10-06 层③：列表来自 **manifest**，不再是硬编码的四季数组。
+   *   硬编码 `['spring','summer','autumn','winter']` 的后果是「补了中间档图
+   *   却没同步这里」⇒ 切到那一档时新图现下载 ⇒ `texture()` 返回 null ⇒
+   *   早退 ⇒ **8s 淡入退化为硬切（本帧最需要它）**，且不报错。
+   *   这与「纹理/掩膜必须用 slot 而非 season」同源：
+   *   **凡是「按槽位索引的东西」，槽位清单就只能有一个来源。** */
+  if(this.ready)for(const e2 of allTermImages())this.texture(e2.id,e2.file);
  }
  init(){
   const gl=this.canvas.getContext('webgl',{alpha:false,antialias:false,depth:false,powerPreference:'low-power'});if(!gl)return;this.gl=gl;
@@ -193,7 +220,8 @@ export class Landscape{
   const vs=shader(gl.VERTEX_SHADER,vertex),fs=shader(gl.FRAGMENT_SHADER,fragment),p=gl.createProgram();gl.attachShader(p,vs);gl.attachShader(p,fs);gl.linkProgram(p);gl.deleteShader(vs);gl.deleteShader(fs);if(!gl.getProgramParameter(p,gl.LINK_STATUS)){gl.deleteProgram(p);throw Error('Landscape program unavailable')}
   this.program=p;gl.useProgram(p);this.buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,this.buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
   const pos=gl.getAttribLocation(p,'aPosition');gl.enableVertexAttribArray(pos);gl.vertexAttribPointer(pos,2,gl.FLOAT,false,0,0);
-  this.uniforms=Object.fromEntries(['uImage','uCover','uSize','uTexel','uPointer','uTime','uWind','uMotion','uClarity','uCausticInk','uCausticScale','uCausticWarp','uCausticWarpSpeed','uCausticDrift','uCausticSharp','uCausticGate','uCausticShallow','uTermTint','uTermTintAmt','uTermPattern','uTermHSV','uTermHSVOn'].map(n=>[n,gl.getUniformLocation(p,n)]));gl.uniform1i(this.uniforms.uImage,0);
+  this.uniforms=Object.fromEntries(['uImage','uCover','uSize','uTexel','uPointer','uTime','uWind','uMotion','uClarity','uCausticInk','uCausticScale','uCausticWarp','uCausticWarpSpeed','uCausticDrift','uCausticSharp','uCausticGate','uCausticShallow','uTermTint','uTermTintAmt','uTermPattern','uTermHSV','uTermHSVOn','uImageB','uFade'].map(n=>[n,gl.getUniformLocation(p,n)]));
+  gl.uniform1i(this.uniforms.uImage,0);gl.uniform1i(this.uniforms.uImageB,1);
   const viewport=gl.getParameter(gl.MAX_VIEWPORT_DIMS);
   this.maxSurfaceSize=Math.min(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE),viewport[0],viewport[1]);
   this.lastDraw=null;this.ready=true;
@@ -201,42 +229,171 @@ export class Landscape{
  resize(width,height,dpr){
   if(!this.canvas)return;this.width=width;this.height=height;
   const [w,h]=landscapeDimensions(width,height,dpr,this.maxSurfaceSize);
-  if(this.canvas.width!==w||this.canvas.height!==h){this.canvas.width=w;this.canvas.height=h;this.lastDraw=null}
+  if(this.canvas.width!==w||this.canvas.height!==h){this.canvas.width=w;this.canvas.height=h;this.lastDraw=null;this.shownSeason=null}
  }
+ /* ★★★ 底图槽位：**唯一口径是节气区间**（需求 §2.3 第 5 条）。
+  * ⚠️ 这里**不能**直接调 `termSeason(solarTerm)`：它在名字找不到时
+  *   `return index<0 ? 'summer' : ...` —— 兜底成夏天，于是
+  *   `termSeason(undefined) || 老逻辑` 里的 `||` **永远不生效**，
+  *   降级路径成了死代码：老存档（无节气）会被静默按 summer 选图。
+  *   正解：先判名字在不在 SOLAR_TERMS 里，再查 TERM_SEASON。
+  *   这也是「`||` 兜底 + 上游已兜底 = 兜底失效」的又一例：
+  *   **加兜底前必须确认上游不会先兜底**。
+  * 降级链：节气名 → weather/season（老存档与非时令模式的旧行为，逐位不变）。 */
+ bgSeason(options){
+  const term=options.solarTerm;
+  if(term){
+   const i=SOLAR_TERMS.indexOf(term);
+   if(i>=0)return TERM_SEASON[i];
+  }
+  return options.weather==='snowy'?'winter':options.season;
+ }
+ /* ★★★ 底图**槽位**（2026-10-06 层③）：manifest 显式映射，需求 §2.3 第 5 条②。
+  *
+  * ★★ 为什么不能继续用 `bgSeason()` 的季节名当纹理 key ——
+  *   季节名只有 4 个值，纹理/掩膜/淡入基准全按它索引。一旦 manifest 里
+  *   出现**中间档图**（层② 生图补的就是这个），同一季节就有两张图：
+  *     · `textures`/`waterMasks` 用季节做 key ⇒ 第二张图把第一张顶掉，
+  *       `waterAt()` 读到的是**另一张图的水陆形状** ⇒ 雨圈落在不该落的地方，
+  *       **且不报任何错**；
+  *     · 淡入状态机判「图变了」也用季节 ⇒ 同季内换图 `from===to` ⇒
+  *       直接 `uFade=1`，8s 淡入**静默失效**（这是「判据只看状态不看维度」
+  *       的又一例：check:term:fade 全绿，因为它测的 4 对全是跨季的）。
+  *   ⇒ 槽位（manifest 的 `id`）才是「一张具体的图」的正确标识。
+  *   `this.season` 仍保留（季节名，供 `windStrength`/量具/调试看），
+  *   但**纹理、掩膜、淡入三处一律用 slot**。
+  *
+  * ⚠️ 降级链已内聚到 `resolveTermImage()`（term → weather → season → fallback），
+  *   这里不再重复实现一遍 —— 两处各写一次降级链必然漂移。 */
+ bgSlot(options){return resolveTermImage(options)}
  getStats(){
-  const image=this.images.get(this.season);
+  const image=this.images.get(this.slot);
   return {backgroundSize:this.ready&&this.gl&&!this.gl.isContextLost()?[this.gl.drawingBufferWidth,this.gl.drawingBufferHeight]:null,
    sourceSize:image?.naturalWidth?[image.naturalWidth,image.naturalHeight]:null};
  }
- texture(season){
-  if(this.textures.has(season))return this.textures.get(season);
-  const image=this.images.get(season);
+texture(slot,file){
+  if(this.textures.has(slot))return this.textures.get(slot);
+  const image=this.images.get(slot);
   if(image?.complete&&image.naturalWidth){
-   const gl=this.gl,texture=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,texture);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,image);this.textures.set(season,texture);return texture;
+   const gl=this.gl,texture=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,texture);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,image);this.textures.set(slot,texture);return texture;
   }
-  if(!image){const img=new Image();this.images.set(season,img);img.onload=()=>{if(!this.dead){this.cacheWaterMask(season,img);this.onLoad?.()}};img.src=`${import.meta.env.BASE_URL}assets/${season==='summer'?'pond':season}.png?v=1.5`}
+  /* ★★★ 这里是「懒两步」：本次调用只发 img.src，**建 texture 要等下一次调用**。
+   * 而下一次调用只会发生在 render() 里 —— 一旦某个槽位不是当前槽位
+   * （比如预热另外几张），就永远没人再调它 ⇒ 图下完了、纹理却建不出来。
+   * 实测症状：`images` 四张全 `complete=true`，`textures` 只有 1 个。
+   * 正解：onload 里**自举**这一步，不依赖「下一次 render」。
+   * （顺带修掉一个死锁：早退的 render 也不会再请求新图。） */
+  if(!image){
+   const img=new Image();this.images.set(slot,img);
+   img.onload=()=>{if(this.dead)return;this.cacheWaterMask(slot,img);this.lastDraw=null;this.texture(slot,file);this.onLoad?.()};
+   /* ★★ 文件名与版本号**由调用方给**（`bgSlot` 的返回值），这里**不回查 manifest**。
+    *
+    * 起因是一个量具抓到的真实缺陷：旧的 `texture(slot)` 只拿槽位 id，
+    * 于是自己去 `allTermImages().find(e=>e.id===slot)` 找 file ——
+    * **等于把 `bgSlot` 的解析结果扔掉重算一遍**。两个后果：
+    *   ① manifest 里没有的槽位（补图前、或测试注入的）会 `find` 到 undefined
+    *      ⇒ fallback 用**槽位名当文件名** ⇒ 请求 `/assets/<槽位名>.png`
+    *      ⇒ 404 ⇒ `onload` 永不触发 ⇒ `textures` 永远建不出这个槽位。
+    *      症状：切档后画面停在旧图，**无任何报错**（404 只是网络层失败）。
+    *   ② 同一份映射被解析两次 ⇒ 两者可以不一致 ⇒ 纹理与掩膜可能对不上图。
+    * ⇒ **一次解析，逐层透传**。所有调用方（render / 预热）都必须给 file。
+    *   「不是『一个来源』就必然出现『第二个来源悄悄接管』」——
+    *   第一版这里留了 `find` 兜底，护栏立刻把它抓了出来。 */
+   if(!file)throw Error(`Landscape.texture: 槽位 ${slot} 没有给文件名`);
+   img.src=termImageURL(import.meta.env.BASE_URL,{file,v:'1.5'});
+   /* ★ 缺图必须留线索：否则 404 完全静默，
+   *   量具只会报「淡入没生效」，而真因（图不存在）在任何日志里都不出现。 */
+   img.onerror=()=>{console.warn(`[landscape] 底图缺失：assets/${file}.png（槽位 ${slot}）`)};
+  }
   return null;
  }
- cacheWaterMask(season,image){
+ cacheWaterMask(slot,image){
   // A one-time small color mask prevents rain from drawing water rings on dry banks.
   const c=document.createElement('canvas');c.width=384;c.height=216;
   const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0,384,216);
   const pixels=ctx.getImageData(0,0,384,216).data,mask=new Uint8Array(384*216);
   for(let i=0;i<mask.length;i++)mask[i]=Math.min(pixels[i*4+1],pixels[i*4+2])-pixels[i*4]>10?1:0;
-  this.waterMasks.set(season,mask);c.width=c.height=0;
+  this.waterMasks.set(slot,mask);c.width=c.height=0;
  }
  waterAt(x,y){
-  const mask=this.waterMasks.get(this.season);if(!mask||!this.width)return true;
+  /* ★ key 必须是 **slot**，不是 season —— 掩膜是**这张图**的属性，
+   *   同一季节的不同图水陆形状不同（补中间档图后会立刻撞上）。
+   *   错用 season 的症状：雨圈落在另一张图的水里，**不报任何错**。 */
+  const mask=this.waterMasks.get(this.slot);if(!mask||!this.width)return true;
   const ratio=this.width/this.height,cx=Math.min(1,ratio/(16/9)),cy=Math.min(1,(16/9)/ratio);
   const u=(x/this.width-.5)*cx+.5,v=(y/this.height-.5)*cy+.5;
   if(u<0||u>=1||v<0||v>=1)return false;
   return !!mask[Math.floor(v*216)*384+Math.floor(u*384)];
  }
+ /* ★★★ 底图口径（2026-10-06，需求 §2.3 第 5 条）。
+  *
+  * **唯一口径是节气区间**，不是月份、不是天气：
+  *   - 旧写法 `options.weather==='snowy'?'winter':options.season` 有两个问题：
+  *     ① 天气会把**任何季节**的底图硬切成 winter（春天飘雪 ⇒ 满池荒雪）；
+  *     ② `options.season` 在 follow 模式下来自 `getSeason(date,lat)`，
+  *        那是**按月份**切的（1-3 春 / 4-6 夏 …），与节气切点必然错开几天 ——
+  *        需求原文「这是两套逻辑，边界日会给出不同的图」说的就是这个。
+  *   - 现在：`termSeason(solarTerm)` 查 almanac.js 的 `TERM_SEASON`（24 档 →
+  *     四季），与 `term-visual.js` 里焦散/物候用的是**同一张表**，
+  *     底图与水色/荷叶/霜雪因此**必然**同季，不会再各说各话。
+  *   - 降级：拿不到节气名（老存档 / 非时令模式）时仍走 weather+season，
+  *     保证旧路径逐位不变（守卫见 tests/almanac-pheno.test.js）。
+  *
+  * 8s 交叉淡入：单 pass 双纹理（uImage 旧 / uImageB 新 / uFade 0→1）。
+  * ⚠️ 三条设计约束（每条都踩过或已排除）：
+  *  ① **首次加载不淡入**。`this.season` 为 null 时直接落新图 —— 冷启动没有
+  *     "上一张"，淡入只会让整个池塘从模糊中浮出来（8s 里用户看到的是半透明叠加）。
+  *     这也是所有量具的现状：`probe-terms`/`check-term-delta`/`check-frost-ui`
+  *     都靠 `page.reload()` 逐档，reload 必然走"首载"路径 ⇒ 判据不会撞上淡入中间态。
+  *  ② **只有底图真的换了才淡入**。同季内相邻节气共用一张图 ⇒ from===to ⇒
+  *     直接置 uFade=1（淡入 0 张图切换 = 白做一遍全屏混合，白掉 6.4% 填充率）。
+  *     24 档里只有 4 个跨季边界会真正淡入。
+  *  ③ **时间基准是引擎 sim.time**，不是 `performance.now()`。这样
+  *     `__freeze`（sim.time=0）能真的把淡入钉住，量具可复现；
+  *     代价是 reducedMotion 下 time 不走 ⇒ 淡入不完成（见 key 里的处理）。
+  */
  render(time,options,hand){
   if(!this.ready||!this.width||this.gl.isContextLost())return;
-  const gl=this.gl,season=options.weather==='snowy'?'winter':options.season,texture=this.texture(season);
-  if(!texture){this.canvas.style.opacity='0';return}
-  this.season=season;this.canvas.style.opacity='1';const u=this.uniforms;
+  const gl=this.gl;
+  /* ★★★ 槽位（manifest id）是「一张具体的图」的唯一标识。
+   * 淡入 / 纹理 / 掩膜三处一律用它，`this.season` 只作为季节名留给人看。
+   * 用季节名当基准的致命后果：补了中间档图后，同季内换图 from===to
+   * ⇒ 8s 淡入**静默失效**（check:term:fade 测不出，因为它只测跨季 4 对）。 */
+  const entry=this.bgSlot(options);
+  const slot=entry.id;
+  /* ★ file 与 v 一路透传，不在 texture() 里回查 manifest（见 texture 注释里的
+   *   「一次解析，逐层透传」：重算会丢掉注入槽位的 file，退化成 404）。 */
+  const texture=this.texture(slot,entry.file);
+  if(!texture){this.canvas.style.opacity='0';this.pendingSeason=slot;this.shownSeason=null;return}
+  this.pendingSeason=null;
+  const instant=!!(options.reducedMotion||options.paused);
+  let fadeFrom=null,fade=1;
+  if(!instant&&this.shownSeason&&this.shownSeason!==slot){
+   if(this.fadeFrom){                       /* 已在淡入：只看进度 */
+    fadeFrom=this.fadeFrom;
+    fade=Math.min(1,Math.max(0,(time-this.fadeStart)/TERM_FADE_SECONDS));
+    if(fade>=1){this.fadeFrom=null;fadeFrom=null}
+   }else{                                   /* 首次起算：记下起点与时刻 */
+    this.fadeFrom=this.shownSeason;this.fadeStart=time;
+    fadeFrom=this.fadeFrom;fade=0;
+   }
+  }else this.fadeFrom=null;
+  /* ⚠️ 淡入**进行中**时不要动 shownSeason：它要一直是「起点那张」，
+   *   直到淡入走完那一帧才更新。否则第二帧的基准就变成了新图，
+   *   `shownSeason!==slot` 为假 ⇒ 淡入第二帧就被掐断。 */
+  if(!fadeFrom||fade>=1)this.shownSeason=slot;
+  const prevTexture=fadeFrom?this.texture(fadeFrom):texture;
+  /* 旧图还没解码完 ⇒ 只能硬切。必须放在这里（而不是紧跟上一行）：
+   * 那一行的 `prevTexture` 在 fadeFrom 为空时必然等于 texture，
+   * 无条件回退会把「淡入中但起点图缺失」的情形悄悄放过。 */
+  if(!prevTexture)prevTexture=texture;
+  /* 淡入的**两张图必须都已就绪**才允许起算 —— 否则画面会停在上一张，
+   * 而 uFade 照样在走（进度条满了但图没换）。 */
+  if(fadeFrom&&!prevTexture){fadeFrom=null;fade=1}
+  /* `season` 仍写成季节名：`windStrength`/量具/调试读它，
+   * 且与 `options.season` 语义一致（下游 atmosphere/light-field 也用季节名）。 */
+  this.season=this.bgSeason(options);this.slot=slot;
+  this.canvas.style.opacity='1';const u=this.uniforms;
   // Large native backgrounds keep their full pixel grid. Only the tiny plant
   // sway samples at 30 Hz above 4K; fish, rain and water continue at 60 Hz.
   const rate=this.canvas.width*this.canvas.height>3840*2160?30:60;
@@ -257,14 +414,26 @@ export class Landscape{
    *   否则 [1,2] 与 [1,2] 之外的不同数组会各自 stringify 但 [1,2] 与 '1,2' 撞车）。 */
   const tv=options.termVisual;
   const tk=tv?`${tv.termTintHSV||''}|${tv.tintR},${tv.tintG},${tv.tintB}|${tv.termTintGain||''}|${options.termPattern}|${options.termTintAmt}`:'';
-  const key=`${season}:${options.weather}:${options.reducedMotion}:${options.quality}:${options.desktopMode}:${tk}`;
+  /* ★★★ key 里必须有 **solarTerm** 与 **fade 进度**（2026-10-06）。
+   * ① solarTerm：底图现在按节气选（termSeason），同季内换节气 season 不变，
+   *    而 24 档的画面差异全靠 uTermHSV —— 不带节气就会出现「参数全对、
+   *    画面逐位不变」的老症状（tick 被钉住时 lastDraw 直接命中 return）。
+   * ② fade 进度：淡入是**连续量**，每帧都变。不带它 ⇒ 同 tick 下淡入被
+   *    短路，画面停在淡入起点，8s 淡入变成"永远淡不进去"。
+   *    量化到 1/1000 足够（肉眼分辨不出），但足以让每帧 key 不同。
+   * ⚠️ 数组/浮点直接进字符串会撞车（[1,2] vs '1,2'），故一律显式 join + 定点化。 */
+  const fk=`${options.solarTerm||''}:${slot}:${fadeFrom||''}:${fade.toFixed(3)}`;
+  const key=`${slot}:${fk}:${options.weather}:${options.reducedMotion}:${options.quality}:${options.desktopMode}:${tk}`;
   if(this.lastDraw?.tick===tick&&this.lastDraw.key===key)return;
   this.lastDraw={tick,key};
-  gl.viewport(0,0,this.canvas.width,this.canvas.height);gl.useProgram(this.program);gl.bindTexture(gl.TEXTURE_2D,texture);
+  gl.viewport(0,0,this.canvas.width,this.canvas.height);gl.useProgram(this.program);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);
+  gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,prevTexture);
+  gl.uniform1f(u.uFade,fadeFrom?fade:1);
   const ratio=this.width/this.height,aspect=3840/2160;
   gl.uniform2f(u.uCover,ratio<aspect?ratio/aspect:1,ratio>aspect?aspect/ratio:1);
   gl.uniform2f(u.uSize,this.width,this.height);gl.uniform3f(u.uPointer,(hand.x||0)/this.width,(hand.y||0)/this.height,Math.min(1,hand.life||0));
-  const image=this.images.get(season);gl.uniform2f(u.uTexel,1/image.naturalWidth,1/image.naturalHeight);
+  const image=this.images.get(slot);gl.uniform2f(u.uTexel,1/image.naturalWidth,1/image.naturalHeight);
   gl.uniform1f(u.uClarity,options.desktopMode&&options.quality!=='low'?.28:0);
   // Caustic net: amplitude is the product of weather and season gates. Low quality
   // drops it entirely — the mesh is a high-frequency texture and aliases badly.
@@ -379,6 +548,10 @@ export class Landscape{
   }else if(u.uTermTint){
    gl.uniform3f(u.uTermTint,1,1,1);gl.uniform1f(u.uTermTintAmt,0);
   }
+  /* ★ 必须复位到单元 0：`texture()` 里是裸 `gl.bindTexture(...)`，
+   * 它绑的是**当前活动单元**。留在 1 的话下一帧新建的底图纹理会被挂到
+   * 单元 1，而 uImage 读的是单元 0 ⇒ 画面停在旧图且**无任何报错**。 */
+  gl.activeTexture(gl.TEXTURE0);
   gl.uniform1f(u.uTime,time);gl.uniform1f(u.uWind,windStrength(options.weather,options.season));gl.uniform1f(u.uMotion,options.reducedMotion?0:1);gl.drawArrays(gl.TRIANGLES,0,6);
  }
  destroy(){
