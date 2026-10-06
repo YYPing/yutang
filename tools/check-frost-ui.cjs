@@ -17,7 +17,10 @@
  *   ① 六个有霜档位（霜降→立春）岸边带像素差 > 0.1%（确实画了）
  *   ② 岸边带差值 > 池心差值 × 3（霜只挂岸边，不是全图泛白）
  *   ③ 无霜档位（惊蛰/春分）差 ≈ 0（不是无脑常开）
- *   ④ 薄冰档位才有霜：封冰档（大雪/冬至）必须为 0（霜被压在冰下）
+ *   ④ 无霜档位（惊蛰/春分）岸边差 ≈ 0（不是无脑常开）
+ *      ⚠️ 2026-10-05 起**封冰档也算「有霜」**：用户取消了冬季冰层，
+ *        `drawFrost` 里的 `|| ice>=0.55` 门控随之删除 ——
+ *        深冬（大雪/冬至/小寒/大寒）现在**应该**有霜，不再是「霜压在冰下」。
  *   ⑤ 噪声底对照：同一档截两张，差应≈0
  *
  * 前置：dev server 在 5188。
@@ -34,7 +37,8 @@ const PY = 'C:/Users/Y/.workbuddy/binaries/python/envs/default/Scripts/python.ex
 const EXE = 'C:/Users/Y/AppData/Local/ms-playwright/chromium_headless_shell-1223/chrome-headless-shell-win64/chrome-headless-shell.exe';
 
 /* 霜的物候：寒露 .2 起 → 霜降 .8 → 立冬 1 → 立春 .6 → 雨水 .2 → 惊蛰 0。
- * 阈值「有霜」取 frost > 0.05；封冰档 ice >= 0.55 按设计不画。 */
+ * 阈值「有霜」取 frost > 0.05。
+ * ⚠️ 不要再按 `ice` 过滤（2026-10-05 冰层已取消，深冬同样有霜）。 */
 const TERMS = ['霜降', '立冬', '小雪', '大雪', '冬至', '立春', '雨水', '惊蛰', '春分'];
 
 let pass = 0, fail = 0;
@@ -185,11 +189,11 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
   }
 
   section('③ 判据');
-  const withFrost = rows.filter((r) => r.frost > 0.05 && r.ice < 0.55);
-  const noFrost = rows.filter((r) => !(r.frost > 0.05 && r.ice < 0.55));
+  const withFrost = rows.filter((r) => r.frost > 0.05);
+  const noFrost = rows.filter((r) => !(r.frost > 0.05));
   const drawn = withFrost.filter((r) => r.bank > 0.1);
   ok(drawn.length === withFrost.length,
-    '① 所有「有霜且未封冰」档位岸边带都有可见变化（frost 真被消费了）',
+    '① 所有有霜档位（含深冬封冰档）岸边带都有可见变化（frost 真被消费了）',
     `${drawn.length}/${withFrost.length}（${withFrost.map((r) => `${r.term}:${r.bank.toFixed(2)}%`).join(' ')}）`);
   ok(withFrost.every((r) => r.core <= 0.05),
     '② 池心基本不变（霜只挂岸边，没有溢到池心）',
@@ -200,7 +204,7 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
     withFrost.map((r) => `${r.term}:${(r.core <= 0.05 ? '∞' : (r.bank / r.core).toFixed(1))}`).join(' '));
   const maxNo = Math.max(0, ...noFrost.map((r) => r.bank));
   ok(maxNo <= 0.02,
-    '④ 无霜档位/封冰档位岸边差≈ 0（不是无脑常开，也没把霜画到封冰下面）',
+    '④ 无霜档位岸边差≈ 0（不是无脑常开）',
     noFrost.map((r) => `${r.term}(frost=${r.frost.toFixed(2)},ice=${r.ice.toFixed(2)}):${r.bank.toFixed(3)}%`).join(' '));
 
   section('④ 页面异常');
