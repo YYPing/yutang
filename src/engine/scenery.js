@@ -71,10 +71,20 @@ export class Scenery{
   // 与 pond.js 的 drawRipples / drawFeedCircles 同一套（量具 tools/check-water-rings.cjs）。
   rain(ctx,a,w,h,o){
    // ★ 昼夜连续化：岸线颜色同色、只变强度（避免黎明"颜色跳变"）
-  ctx.save();ctx.strokeStyle=`rgba(230,247,240,${byDaylight(.31,.5,o)})`;ctx.lineWidth=.85;ctx.beginPath();
+  // ★★ 线宽 0.85 → 1.15、雨丝长度 12+9s → 15+11s（2026-10-07 目视返工，P2-2）。
+  //   起因：1× 全图上雨几乎读不出来（放大截图里却很清楚——正是 skill
+  //   `canvas-visual-acceptance` 说的「8× 好看但 1× 不成立」）。
+  //   ⚠️ 归因**不是**「条数不够」：条数 44→70（+59%）时雨的屏幕占比一位没动。
+  //   ⚠️ 也**不是**「线宽不够」：反证实测 0.85 与 1.15 的占比差在噪声内
+  //   （0.173% vs 0.169%）⇒ **决定因子是「长度 × 条数」，线宽影响很小**
+  //   （雨是细线，加粗并不显著增加覆盖面积）。
+  //   两项都改之后：落点提亮 7.7→10.8、1× 占比 0.118%→0.169%，目视可辨。
+  ctx.save();ctx.strokeStyle=`rgba(230,247,240,${byDaylight(.31,.5,o)})`;ctx.lineWidth=1.15;ctx.beginPath();
    // ★ `rainDrops` = 天气雨 + **节气雨**（P2-2「雨水不下雨」2026-10-07）。
    //   原来读 `a.drops`，而它只在 `wet(weather)` 时才有内容 ⇒ 晴天档位永远没有雨丝。
-   for(const d of a.rainDrops){const {x,y,slant}=rainPosition(d,w,h,o);ctx.moveTo(x+4*slant,y-12-d.seed*9);ctx.lineTo(x,y)}ctx.stroke();
+   //   ⚠️ 雨丝长度也一起加长（12+seed*9 → 15+seed*11）：
+   //   长度是 footprint 的另一个乘数，且加长不增加视觉噪声（细线本来就淡）。
+   for(const d of a.rainDrops){const {x,y,slant}=rainPosition(d,w,h,o);ctx.moveTo(x+4*slant,y-15-d.seed*11);ctx.lineTo(x,y)}ctx.stroke();
    for(const r of a.impacts){const p=r.age/r.life,rad=2+p*(r.kind==='rain'?24:32);ctx.lineWidth=.8;
     ctx.strokeStyle=`rgba(228,247,228,${(1-p)**1.5*byDaylight(.33,.55,o)})`;ctx.beginPath();ctx.arc(r.x,r.y,rad,0,TAU);ctx.stroke();
     if(p>.17){ctx.strokeStyle=`rgba(224,246,225,${(1-p)**2*.3})`;ctx.beginPath();ctx.arc(r.x,r.y,rad*.65,0,TAU);ctx.stroke()}

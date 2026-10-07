@@ -147,7 +147,7 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
         const dpr = e.dpr || 1;
         const seg = (d) => {
           const p = window.__rp(d, e.width, e.height, e.options);
-          return { x: (p.x + 2 * p.slant) * dpr, y: (p.y - (6 + d.seed * 4.5)) * dpr };
+          return { x: (p.x + 2 * p.slant) * dpr, y: (p.y - (7.5 + d.seed * 5.5)) * dpr };
         };
         return {
           rain: e.termVisual.rain,
@@ -202,6 +202,18 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
     '            continue',
     '        vals.append(float(a[y - R:y + R + 1, x - R:x + R + 1].mean()))',
     '    return float(np.mean(vals)) if vals else None',
+    'def footprint(on_p, kill_p):',
+    '    """**雨在屏幕上占了多少像素** —— 1× 观感的直接代理量。',
+    '    量法：on 与 kill 两张的逐像素最大通道差 > 6 的占比。',
+    '    ⚠️ 第一版这里用的是「亮+冷像素绝对占比」，**那个指标压根没在量雨**：',
+    '      雨丝是 alpha .31~.5 的细线压在中亮度水色上，落点亮度只有 ~0.66，',
+    '      而阈值是 lum>0.80 ⇒ 雨丝**从一开始就被阈值排除在外**。',
+    '      证据：`TERM_RAIN_MAX` 从 44 加到 70（+59%），该指标 0.586% → 0.586%（一位没动）。',
+    '    ⇒ 「加了量但指标不动」正是判据没在量目标量的信号（同「全绿且很快」）。',
+    '      差分法直接 attributable 于雨，且随雨量单调变化。"""',
+    '    a = np.asarray(Image.open(on_p).convert(\'RGB\'), dtype=np.float32)',
+    '    b = np.asarray(Image.open(kill_p).convert(\'RGB\'), dtype=np.float32)',
+    '    return float((np.abs(a - b).max(axis=2) > 6).mean() * 100)',
     'out = []',
     'for r in rows:',
     '    rec = {',
@@ -209,6 +221,7 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
     '        "termDrops": r["on"]["termDrops"],',
     '        "killTermDrops": r["kill"]["termDrops"],',
     '        "weatherDrops": r["on"]["weatherDrops"],',
+    '        "fp": footprint(r["on"]["f"], r["kill"]["f"]),',
     '    }',
     '    # 有雨档：on 档的落点集 vs kill 档**同一批坐标**（位置不变，只是雨丝不画了）',
     '    rec["onAt"] = sample(r["on"]["f"], r["on"]["pts"])',
@@ -225,7 +238,8 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
   for (const r of rows) {
     const lift = (r.onAt != null && r.killAt != null) ? r.onAt - r.killAt : null;
     console.log(`  ${r.term.padEnd(3)} rain=${r.rain.toFixed(2)} termDrops=${String(r.termDrops).padStart(2)}`
-      + `  落点亮度 on=${fmt(r.onAt)} kill=${fmt(r.killAt)} 提亮=${lift == null ? '—' : lift.toFixed(1).padStart(5)}`);
+      + `  落点亮度 on=${fmt(r.onAt)} kill=${fmt(r.killAt)} 提亮=${lift == null ? '—' : lift.toFixed(1).padStart(5)}`
+      + `  1×雨 footprint ${r.fp.toFixed(3)}%`);
   }
 
   section('③ 判据');
@@ -270,6 +284,41 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
       `雨水 ${ws.termDrops}条  惊蛰 ${jz.termDrops}条  立春 ${lc.termDrops}条`);
   }
 
+  /* ⑥ ★★★ 「存在」不等于「看得见」，而**判据本身也得先证明它在量目标量**。
+   *   落点提亮只证明雨丝被画在它该在的位置，**证明不了 1× 下读得出来**。
+   *   这里量「雨在屏幕上占了多少像素」（on/kill 差分 footprint），两条要求：
+   *   (a) **随雨量单调**：雨水 > 惊蛰 > 立春，且无雨档 ≈ 0
+   *       —— 这条同时是判据自身的有效性检验：若雨量翻倍而 footprint 不动，
+   *          说明这个指标压根没在量雨（第一版就栽在这里：44→70 条，
+   *          「亮冷像素占比」0.586% → 0.586%，一位没动）。
+   *   (b) **绝对下限**：见下方 FP_MIN 的来历。
+   *
+   * ★★ 阈值 0.12% 是**从反证实测反推**的，不是拍的。
+   *   ⚠️ 第一版我拍了个 0.25%，然后反证立刻把它打脸：
+   *     **线宽 1.15 改回 0.85，footprint 0.169% → 0.173%（反而更高，仍过阈值）**
+   *     ⇒ 那个阈值区分不出「调过」与「没调过」，等于没判。
+   *   逐档实测（70 条，只改笔画粗细/长度）：
+   *     宽 1.15 · 长 15+11s ⇒0.169%  ← 定稿（1× 目视：斜向雨丝可辨）
+   *     宽 0.85 · 长 15+11s ⇒ 0.173%（反证：仍过 ⇒ 宽度不是主要因子）
+   *     宽 0.50 · 长 15+11s ⇒ 0.116%（反证：报红 ✓ 阈值在此之上）
+   *   ⇒ 定 0.12%：高于「调到 0.5 宽」的反证态、低于定稿态，两端各留余量。
+   *     结论也写进实现：**footprint 主要由「长度 × 条数」决定，线宽影响很小**
+   *     （0.85 与 1.15 差在噪声内）—— 这与「雨是细线」的形态一致。
+   *   ⚠️ 若将来有人把雨调得更密，**该调的是这个阈值而不是实现**——
+   *     先想清楚「雨水这一档该有多密的雨」，那是物候判断，不是数值调节。 */
+  const FP_MIN = 0.12;
+  if (ws && jz && lc) {
+    ok(ws.fp > jz.fp && jz.fp > lc.fp,
+      '⑥a 雨的屏幕占比必须随雨量单调递增（雨水>惊蛰>立春）—— 兼作判据自身的有效性检验',
+      `雨水 ${ws.fp.toFixed(3)}%  惊蛰 ${jz.fp.toFixed(3)}%  立春 ${lc.fp.toFixed(3)}%`);
+    ok(ws.fp >= FP_MIN,
+      `⑥b ★ 1× 绝对可见度：雨水档雨占屏幕 ≥ ${FP_MIN}%（不能「有但看不出来」）`,
+      `实测 ${ws.fp.toFixed(3)}%（1× 截图目视：斜向雨丝可辨）`);
+  }
+  ok(dry.every((r) => r.fp <= 0.01),
+    '⑥c 无雨档位的雨 footprint ≈ 0（不是无脑常开）',
+    dry.map((r) => `${r.term}:${r.fp.toFixed(3)}%`).join(' '));
+
   section('④ 天气雨老通道未被改坏（rainy 天气下 termDrops=0 仍要下雨）');
   const w = await page.evaluate(async () => {
     const e = window.__pondEngine;
@@ -278,16 +327,16 @@ const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
     const dpr = e.dpr || 1;
     const seg = (d) => {
       const p = window.__rp(d, e.width, e.height, e.options);
-      return { x: (p.x + 2 * p.slant) * dpr, y: (p.y - (6 + d.seed * 4.5)) * dpr };
+      return { x: (p.x + 2 * p.slant) * dpr, y: (p.y - (7.5 + d.seed * 5.5)) * dpr };
     };
     return { drops: e.atmosphere.drops.length, termDrops: e.atmosphere.termDrops.length, pts: e.atmosphere.drops.slice(0, 12).map(seg) };
   });
   const wf = join(OUT, 'weather-rainy.png');
   await page.locator('canvas.pond-canvas').screenshot({ path: wf });
   ok(w.drops > 0 && w.termDrops === 0,
-    '⑥ rainy 天气下走 a.drops 老通道、且不与节气雨叠加',
+    '⑦ rainy 天气下走 a.drops 老通道、且不与节气雨叠加',
     `drops=${w.drops} termDrops=${w.termDrops}`);
-  ok(w.pts.length > 0, '⑦ 天气雨落点可算（判据的取样坐标有效）', `${w.pts.length} 个`);
+  ok(w.pts.length > 0, '⑧ 天气雨落点可算（判据的取样坐标有效）', `${w.pts.length} 个`);
 
   section('⑤ 页面异常');
   ok(errors.length === 0, '全程无页面异常', errors.slice(0, 2).join(' | '));

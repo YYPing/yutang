@@ -480,6 +480,29 @@ test('★ P2-2 量具桩必须与 Atmosphere 同构（防「桩落后于实现�
     '桩的 rainDrops getter 语义与实现不一致（实现是 termDrops 为空时返回 drops 本体）');
 });
 
+/* ───── 护栏十：量具的落点取样坐标必须跟着雨丝笔画画法同步 ─────
+ *
+ * ★ 为什么这是个真坑：量具把「雨丝线段中点」**硬编码**成一组常数
+ *   （`(len0+seed*len1)/2`），而 `scenery.rain` 的 `moveTo(x,y-len)` 是另一组。
+ *   改实现（本次把长度 12+9s 加长到 15+11s、线宽 .85→1.15）而忘改量具 ⇒
+ *   **量具还在量旧位置**，可能照样全绿（雨丝够长时旧位置仍落在笔画内），
+ *   也可能假红（够短时落在笔画外）。两种都是「量具与被测量脱钩」。
+ *   ⇒ 判据：量具里的两个常数必须精确等于 `scenery.rain` 那组的一半。
+ */
+test('★ P2-2 量具的落点坐标必须与 scenery.rain 的雨丝笔画画法同步', () => {
+  const scenery = read('src/engine/scenery.js', { raw: true });
+  const tool = read('tools/check-rain-fall.cjs');
+  /* 从实现里解析出 `y-(LO+seed*HI)`（跳过注释行，避免读到文档里的旧值）。 */
+  const code = scenery.split('\n').filter((l) => !/^\s*(\*|\/\/)/.test(l)).join('\n');
+  const m = code.match(/ctx\.moveTo\(x\+\d+\*slant,\s*y-(\d+)-d\.seed\*(\d+)\)/);
+  assert.ok(m, 'scenery.rain 的 moveTo 形状变了 ⇒ 量具的坐标推导需要一起改（先更新本护栏）');
+  const halfBase = Number(m[1]) / 2, halfSpan = Number(m[2]) / 2;
+  const want = `${halfBase} + d.seed * ${halfSpan}`;
+  assert.ok(tool.includes(want),
+    `check-rain-fall.cjs 的落点取样坐标应为 \`${want}\`（= 实现 ${m[1]}+${m[2]}*s 的中点）`
+    + ' —— 不一致则量具在量旧位置，可能假绿也可能假红');
+});
+
 /* ───── 护栏四：冬季水面落叶（用户评审清单 P0-1，2026-10-07） ─────
  *
  * 现象：立冬→大寒的水面漂着**橙黄秋叶**，大寒最违和（冷蓝水面 + 橙红叶）。
