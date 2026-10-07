@@ -204,3 +204,103 @@ test('★ 参考图清单覆盖全部 24 档且与 SOLAR_TERMS 一致（两处�
   assert.equal(Object.keys(REF_POND).length, 24);
   assert.deepEqual(Object.keys(REF_POND).sort(), [...SOLAR_TERMS].sort());
 });
+
+/* ───── 护栏四：冬季水面落叶（用户评审清单 P0-1，2026-10-07） ─────
+ *
+ * 现象：立冬→大寒的水面漂着**橙黄秋叶**，大寒最违和（冷蓝水面 + 橙红叶）。
+ *
+ * ★★ 这里有一对**必须先裁决的冲突需求**：
+ *   评审清单 P0-1「擦干净冬季 6 张水面残留的橙黄枫叶」
+ *   评审清单 P2-2「立冬补足初冬过程（初霜→残荷枯梗）」
+ * 两条在**立冬这一档直接对立**：全清零 ⇒ P2-2 没东西可补；保留 ⇒ P0-1 没擦干净。
+ *
+ * ⇒ 裁决依据是**参考图 `REF_POND`**（第二信源，不是我的口味）：
+ *     立冬 = 「荷叶大部分枯萎成褐色残叶 · 黑褐残茎 · 初霜」  ← **确有残叶，但是褐色**
+ *     小雪 = 「荷叶全枯萎成黑褐残茎 · 薄霜 · 无荷花」        ← 残叶已归零
+ *   所以正解不是「数量归零」，而是**「换颜色 + 深冬清零」**：
+ *     ① 冬季用**枯叶色**（褐/灰褐），不与秋天的橙红共用一套贴图
+ *     ② **立冬保留少量残叶**（兑现 P2-2的「残荷枯梗」）
+ *     ③ **小雪起归零**（兑现 P0-1 的「擦干净」，且与参考图一致）
+ *   ⇒ 两条需求同时满足，且落点从「数量」上移到「颜色 + 时机」。
+ *
+ * ⚠️ 为什么判据要拆成四条而不是一条：
+ *   「冬季落叶数为 0」这一条**会被一种错误修法满足** —— 把立冬的残荷也一起清零。
+ *   那就等于用「修掉违和感」的名义**删掉 P2-2 要求的物候**。
+ *   拆开才能让「立冬仍有残叶」与「小雪起必须为零」**同时**被锁住。
+ */
+
+/** 深冬五档（不含立冬）水面必须无落叶 —— 依据 REF_POND 的小雪/大雪/冬至/小寒/大寒五条。 */
+test('★ P0-1 深冬五档水面落叶必须为 0（依据参考图：小雪起已是「黑褐残茎·无残叶」）', () => {
+  for (const t of ['小雪', '大雪', '冬至', '小寒', '大寒']) {
+    assert.equal(termProfile(t).litter, 0,
+      `${t} 的 litter 必须是 0。参考图 ${REF_POND[t]} 写的是「黑褐残茎/残荷枯枝」，`
+      + '没有水面飘叶；而落叶贴图是橙红色的，漂在冷蓝/雪白水面上就是 P0-1 说的违和');
+  }
+});
+
+/** 立冬必须有少量残叶 —— 这是 P2-2「残荷枯梗」的落点，不能被 P0-1 一刀切清掉。 */
+test('★ P2-2 立冬仍应有少量残叶（参考图「褐色残叶」，且不能被 P0-1 连带清零）', () => {
+  const v = termProfile('立冬').litter;
+  assert.ok(v > 0, '立冬 litter=0 ⇒ 初冬过程里「残荷枯梗」这一环消失，P2-2 无法兑现');
+  assert.ok(v <= 0.3, `立冬 litter=${v} 偏多，参考图是「大部分枯萎」的褐色残叶，不是满池秋叶`);
+});
+
+/** 秋季不能被连带清零 —— 反向断言，防止「冬季清零」被实现成「全局清零」。 */
+test('★ 只清冬季：秋分/霜降的落叶量必须保持峰值（防连带清零）', () => {
+  assert.ok(termProfile('秋分').litter >= 0.9, '秋分是落叶峰值，litter 必须≥ .9');
+  assert.ok(termProfile('霜降').litter >= 0.6, '霜降落叶仍多，litter 必须 ≥ .6');
+  assert.ok(termProfile('立秋').litter >= 0.09, '立秋刚开始落叶，litter 必须 > 0');
+});
+
+/**
+ * ★★ 颜色维度：冬季落叶必须是**枯叶色**，不得与秋天共用橙红贴图。
+ *
+ * 这是本轮真正修掉「违和感」的那一刀 —— 数量只是表象，
+ * 「橙红」才是刺眼的原因（暖色高饱和 vs 冷蓝/雪白背景 = 强对比）。
+ *
+ * ⚠️ 为什么这条只能断言源码而不能断像素：贴图是运行时 canvas 画的
+ *   （`scenery.js` 的 `leafSprite`，按 season+variant 缓存），
+ *   像素要等浏览器渲染；单测层只能锁「冬天不走秋天的颜色分支」。
+ */
+test('★ P0-1 冬季落叶必须用枯叶色，不得与秋天共用橙红（这是违和感的真正来源）', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { join, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const SRC = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'engine', 'scenery.js'), 'utf8');
+  /* 剥掉注释：护栏的说明文字里必然提到「橙红」这些词，直接 match 会假红。 */
+  const code = SRC.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+
+  /* ★★ 第一版判据写成「找 winter 分支 / autumn 分支」⇒ **判据自身失效**：
+   *   实现里 autumn 是三元的**末位 else**（没有 `autumn` 这个字面量），
+   *   于是 `autumn[^;\n]{0,200}?\[…\]` 匹配不到 ⇒ 报「找不到 autumn 分支」。
+   *   ★ 同型坑（MEMORY）：**「判据报『找不到 X』」要先怀疑判据自己，而不是急着改实现**。
+   *   `leafSprite` 还会 return 早退缓存（`if(has) return`），正文与判据要按**字面量**对齐。
+   */
+  const LITERAL = (name) => {
+    /* 匹配 `:'#rrggbb','#rrggbb','#rrggbb'` 这种颜色数组字面量。
+     * 用「三个 #rrggbb 连着出现」而不是「找季节名」，因为季节名在三元里
+     * 只有一个（autumn 是 else 兜底）—— **颜色数组才是三套都有的稳定锚点**。 */
+    const all = [...code.matchAll(/\['(#[0-9a-f]{6})','(#[0-9a-f]{6})','(#[0-9a-f]{6})'\]/gi)].map((m) => m[0]);
+    assert.ok(all.length >= 3,
+      `scenery.js 里只找到 ${all.length} 套三色落叶配色（应≥3：春/夏/秋/冬各一套）`);
+    return all;
+  };
+  const sets = LITERAL();
+  /* 春季（粉）与夏季（绿）本来就有各自的字面量；关键是**秋橙红**与**冬枯褐**
+   * 必须是**两个不同的数组**，而不是同一个被复用。
+   * 判据不写死「哪一套是冬天」——那是实现细节；只断言「存在两套不同的暖色系，
+   * 且 winter 分支引用的不是秋季那套」。 */
+  const warm = sets.filter((s) => /#(d69a38|cb6337|e1b745|8a7355|7a6448|94805e)/i.test(s));
+  assert.ok(warm.length >= 2,
+    `秋季橙红与冬季枯褐必须是两套不同的配色，实际只找到 ${warm.length} 套：${JSON.stringify(warm)}`);
+  /* 反向断言：三套主色必须两两不同（防止「冬季复用秋季」这种改法蒙混过关）。 */
+  const uniq = new Set(sets);
+  assert.equal(uniq.size, sets.length,
+    `有 ${sets.length} 套配色但只有 ${uniq.size} 套不同值 ⇒ 存在跨季复用：${JSON.stringify(sets)}`);
+  /* 兜底兜底：`litterTarget` 的 `??3` 若没改，冬季无档案路径仍会飘 3 片。 */
+  const atmo = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'engine', 'atmosphere.js'), 'utf8');
+  assert.ok(!/LITTER_FALLBACK=\{[^}]*winter:\s*[1-9]/.test(atmo),
+    'atmosphere.js 的 LITTER_FALLBACK.winter 仍非 0 ⇒ 老存档路径还会飘落叶');
+  assert.ok(!/LITTER_FALLBACK\[o\?\.season\]\?\?[1-9]/.test(atmo),
+    'atmosphere.js 的 litterTarget 兜底仍是 `??3` ⇒ season 键缺失时会静默回落 3 片');
+});

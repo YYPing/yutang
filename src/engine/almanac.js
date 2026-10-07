@@ -60,9 +60,21 @@ const TERM_PROFILE = Object.freeze({
   秋分: { warmth: .58, lotus: 0, bud: 0.22,  pod: 0.72,   leaf: .4,  litter: 1,   frost: 0,   ice: 0 },
   寒露: { warmth: .48, lotus: 0, bud: 0.12,  pod: 0.78,   leaf: .3,  litter: .9,  frost: .2,  ice: 0 },
   霜降: { warmth: .38, lotus: 0, bud: 0.08,  pod: 0.68,   leaf: .2,  litter: .7,  frost: .8,  ice: .15 },
-  立冬: { warmth: .28, lotus: 0, bud: 0.00,  pod: 0.40,   leaf: .1,  litter: .5,  frost: 1,   ice: .4,  deepWinter: .20 },
-  小雪: { warmth: .20, lotus: 0, bud: 0.00,  pod: 0.22,   leaf: .05, litter: .3,  frost: 1,   ice: .7,  deepWinter: .48 },
-  大雪: { warmth: .12, lotus: 0, bud: 0.00,  pod: 0.08,   leaf: 0,   litter: .15, frost: 1,   ice: 1,   deepWinter: .74 },
+  //★ `litter`（水面落叶）2026-10-07 修订（用户评审清单 P0-1「擦干净冬季水面残留的橙黄枫叶」）。
+  //
+  //   原值：立冬 .5 / 小雪 .3 / 大雪 .15 / 冬至 .12 / 小寒 .1 / 大寒 .08
+  //   ⇒ **整个冬季水面都在飘橙红秋叶**，大寒最违和（冷蓝水面 + 橙红叶）。
+  //
+  //   ⚠️ 但不能一刀清零 —— 清单 P2-2 同时要求「立冬补足初冬过程的残荷枯梗」，
+  //     两者在立冬这档**直接对立**。裁决依据是参考图 `REF_POND`（第二信源）：
+  //       立冬「荷叶大部分枯萎成**褐色**残叶 · 黑褐残茎 · 初霜」← 有残叶，但是褐色
+  //       小雪「荷叶**全枯萎成黑褐残茎** · 薄霜 · 无荷花」      ← 残叶已归零
+  //   ⇒ 正解是「**立冬留少量枯叶 + 小雪起清零**」，而不是「全冬归零」：
+  //     违和感的真正来源是**橙红**（暖色高饱和压在冷蓝/雪白背景上），
+  //     数量只是表象。颜色那一刀在 `scenery.js` 的 `leafSprite`（冬季枯叶色）。
+  立冬: { warmth: .28, lotus: 0, bud: 0.00,  pod: 0.40,   leaf: .1,  litter: .18, frost: 1,   ice: .4,  deepWinter: .20 },
+  小雪: { warmth: .20, lotus: 0, bud: 0.00,  pod: 0.22,   leaf: .05, litter: 0,   frost: 1,   ice: .7,  deepWinter: .48 },
+  大雪: { warmth: .12, lotus: 0, bud: 0.00,  pod: 0.08,   leaf: 0,   litter: 0,   frost: 1,   ice: 1,   deepWinter: .74 },
 // ★★★ 冬六档：这里是"用连续量表达离散事实"的反面教材，完整记录以免重犯。
 //
 //   起因：用户反馈「每个节气之间都一样」。冬六档（大雪/冬至/小寒/大寒）
@@ -80,9 +92,9 @@ const TERM_PROFILE = Object.freeze({
 //   （立冬起冰 → 小雪加厚 → 大雪冰封 → 三九最整 → 四九最脆），
 //   渲染层只做一次线性映射，不再二次加工。
 //   ★ 同一教训也写在 term-visual.js 的文件头。
-  冬至: { warmth: .10, lotus: 0, bud: 0.00,  pod: 0.05,   leaf: 0,   litter: .12, frost: 1,   ice: 1,   deepWinter: .90 },
-  小寒: { warmth: .05, lotus: 0, bud: 0.00,  pod: 0.03,   leaf: 0,   litter: .1,  frost: 1,   ice: 1,   deepWinter: 1.0 },
-  大寒: { warmth: .02, lotus: 0, bud: 0.00,  pod: 0.02,   leaf: 0,   litter: .08, frost: 1,   ice: .95, deepWinter: .97 },
+  冬至: { warmth: .10, lotus: 0, bud: 0.00,  pod: 0.05,   leaf: 0,   litter: 0,   frost: 1,   ice: 1,   deepWinter: .90 },
+  小寒: { warmth: .05, lotus: 0, bud: 0.00,  pod: 0.03,   leaf: 0,   litter: 0,   frost: 1,   ice: 1,   deepWinter: 1.0 },
+  大寒: { warmth: .02, lotus: 0, bud: 0.00,  pod: 0.02,   leaf: 0,   litter: 0,   frost: 1,   ice: .95, deepWinter: .97 },
   立春: { warmth: .30, lotus: 0, bud: 0.00,  pod: 0.00,   leaf: .1,  litter: .15, frost: .6,  ice: .45 , deepWinter: .45 },
   雨水: { warmth: .40, lotus: 0, bud: 0.12,  pod: 0.00,   leaf: .2,  litter: .1,  frost: .2,  ice: .12 , deepWinter: .12 },
   // ★ leaf 从 .35 降到 .17（2026-10-04，`tests/almanac-pheno.test.js` 抓到的真缺陷）。

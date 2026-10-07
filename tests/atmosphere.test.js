@@ -113,7 +113,16 @@ test('没有 litterCount 时保留季节硬编码（老存档与既有单测不�
  assert.equal(new Atmosphere({season:'autumn'}).leaves.length,19);
  assert.equal(new Atmosphere({season:'spring'}).leaves.length,16);
  assert.equal(new Atmosphere({season:'summer'}).leaves.length,6);
- assert.equal(new Atmosphere({season:'winter'}).leaves.length,3);
+ /* ★ 2026-10-07：冬季由 3 改成 **0**（用户评审清单 P0-1「擦干净冬季水面残留的橙黄枫叶」）。
+  *   这条断言原来写死 3 —— 它锁的是「老存档不能被清空」这个**意图**，
+  *   而"冬季飘 3 片橙红秋叶"本身是那个意图在旧档案里的**具体取值**。
+  *   需求变了（P0-1 明确要求擦干净），取值就得跟着变；
+  *   否则会出现「为了保住断言而保住一个已被用户否定的效果」。
+  *   ⚠️ 同型提醒（与 pond-methods 那条一致）：**断言的形状要跟着意图走**，
+  *   这里的意图从「四季都有落叶」收窄成「四季里只有冬天没有」。
+  *   护栏 `tests/almanac-pheno.test.js` 另外锁住了「立冬仍有少量枯叶」
+  *   （P2-2），所以「冬季清零」不会被实现成「立冬也一起清掉」。 */
+ assert.equal(new Atmosphere({season:'winter'}).leaves.length,0);
 });
 
 test('litterCount=0 时不再补叶（速率通道也要归零，不只是存量）',()=>{
@@ -156,6 +165,15 @@ test('补充间隔在目标=季节默认时精确等于原手感（不因接入�
   const a=new Atmosphere({season:s,litterCount:n});
   const base=Atmosphere.LITTER_BASE_MS[s];
   const got=a.litterInterval(a.options,n);
+  /* ★ 2026-10-07：冬季默认改成 0 片，而 `litterInterval` 对 `target<=0`
+   *   **显式 return Infinity**（这是既有设计：0 会每帧触发补叶）。
+   *   ⇒ 冬季这一项不能拿 `base` 比，它有**独立的正确值**。
+   *   ⚠️ 不改这里就会得到「winter 间隔应为 24s，实为 Infinity」的假红 ——
+   *   那是判据没考虑 0 片这条既有分支，不是实现回归。 */
+  if(n===0){
+   assert.equal(got,Infinity,`${s} 默认 0 片时补叶间隔必须是 Infinity（否则每帧触发补叶）`);
+   continue;
+  }
   assert.ok(Math.abs(got-base)<1e-9,`${s} 间隔应为原基数 ${base}s，实为 ${got}`);
  }
 });

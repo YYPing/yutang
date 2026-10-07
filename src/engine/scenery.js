@@ -16,13 +16,31 @@ export class Scenery{
  leafSprite(season,variant){
   const key=season+variant;if(this.leafSprites.has(key))return this.leafSprites.get(key);
   const canvas=document.createElement('canvas');canvas.width=128;canvas.height=128;const c=canvas.getContext('2d');c.translate(64,64);c.scale(2.1,2.1);
-  const spring=season==='spring';const colors=spring?['#f4d7d5','#f2b6be','#e8c7c8']:season==='summer'?['#799354','#759351','#b6ad58']:['#d69a38','#cb6337','#e1b745'];
-  const g=c.createLinearGradient(-12,-18,14,18);g.addColorStop(0,colors[variant]);g.addColorStop(1,spring?'#d591a2':season==='summer'?'#467451':'#ab7134');c.fillStyle=g;
+  const spring=season==='spring',winter=season==='winter';
+  /* ★★★ 2026-10-07：冬季落叶改**枯叶色**（用户评审清单 P0-1）。
+   *   原状是一个三元：spring / summer / **else** ⇒ `winter` 落进 else，
+   *   拿到的是秋天的**橙红**（`#d69a38`/`#cb6337`/`#e1b745`）。
+   *   于是「橙红秋叶漂在冷蓝/雪白水面上」—— 大寒最违和。
+   *
+   *   ★ 为什么改颜色比清零更对：违和的来源是**暖色高饱和压在冷背景上**的强对比，
+   *   数量只是表象。参考图 `REF_POND` 立冬写的是「荷叶大部分枯萎成**褐色**残叶」
+   *   ⇒ 初冬确实该有残叶，但必须是**褐色**的。色相从 ~30°(橙)移到 ~25°(褐)且
+   *   饱和大幅降低，才是「冬天的枯叶」而不是「秋天的叶子忘了删」。
+   *
+   *   ⚠️ 三套颜色必须**互不相同**（护栏 `tests/almanac-pheno.test.js`
+   *   会断言 winter ≠ autumn，防止将来「优化」时又合并回去）。
+   *   秋季保留高饱和橙红 —— 那是对的，霜降/立秋本就该是暖色。 */
+  const colors=spring?['#f4d7d5','#f2b6be','#e8c7c8']
+    :winter?['#8a7355','#7a6448','#94805e']
+    :season==='summer'?['#799354','#759351','#b6ad58']
+    :['#d69a38','#cb6337','#e1b745'];
+  const g=c.createLinearGradient(-12,-18,14,18);g.addColorStop(0,colors[variant]);
+  g.addColorStop(1,spring?'#d591a2':winter?'#5f4d36':season==='summer'?'#467451':'#ab7134');c.fillStyle=g;
   c.beginPath();
   if(spring){c.moveTo(0,-19);c.bezierCurveTo(19,-26,22,0,0,22);c.bezierCurveTo(-18,3,-19,-19,0,-19)}
   else if(variant===2){c.moveTo(0,20);c.bezierCurveTo(-9,6,-27,-9,-20,-19);c.quadraticCurveTo(-8,-31,0,-19);c.quadraticCurveTo(10,-30,23,-18);c.quadraticCurveTo(26,-6,0,20)}
   else{for(const [i,p] of [[0,-25],[5,-12],[16,-19],[13,-7],[24,-5],[16,3],[22,11],[7,12],[2,22],[-4,15],[-17,20],[-15,7],[-25,3],[-13,-5],[-18,-17],[-5,-12]].entries())i?c.lineTo(...p):c.moveTo(...p)}
-  c.closePath();c.fill();c.strokeStyle=spring?'rgba(181,108,128,.35)':'rgba(102,73,37,.4)';c.lineWidth=.65;c.beginPath();c.moveTo(0,-16);c.lineTo(0,25);
+  c.closePath();c.fill();c.strokeStyle=spring?'rgba(181,108,128,.35)':winter?'rgba(74,60,40,.45)':'rgba(102,73,37,.4)';c.lineWidth=.65;c.beginPath();c.moveTo(0,-16);c.lineTo(0,25);
   if(!spring)for(let i=0;i<4;i++){c.moveTo(0,12-i*7);c.lineTo(-14,4-i*6);c.moveTo(0,12-i*7);c.lineTo(14,3-i*6)}c.stroke();
   this.leafSprites.set(key,canvas);return canvas;
  }

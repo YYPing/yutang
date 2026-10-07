@@ -29,10 +29,17 @@ export class Atmosphere{
   *   ③ 没有 `litterCount` 的调用方（老存档 / 单测直接 new Atmosphere）
   *     必须**原样保留**季节硬编码值，否则会静默把秋天的落叶清空。
   */
- static LITTER_FALLBACK={autumn:19,spring:16,summer:6,winter:3};
- /** 补充间隔基数（秒），沿用原季节手感。 */
+ /*★★ 2026-10-07：`LITTER_FALLBACK.winter` 由 3 改成 **0**（用户评审清单 P0-1
+ *   「擦干净冬季水面残留的橙黄枫叶」）。落叶贴图是**暖色高饱和**的，
+ *   漂在冷蓝/雪白水面上就是清单说的违和（`scenery.js` 同时把冬季改成枯叶色）。
+ *   ⚠️ 下面 `litterTarget` 末尾的 `??3` 也必须改成 `??0` ——
+ * *   只改表不改兜底，`season` 是 winter 时若键缺失/拼错，会静默回落到 3 片。
+ *   ⇒ **无档案路径（老存档、单测直接 new Atmosphere）也要一起清**，
+ *      否则「改了档案就以为完了」会漏掉最旧那一档。 */
+ static LITTER_FALLBACK={autumn:19,spring:16,summer:6,winter:0};
+ /* 补充间隔基数（秒），沿用原季节手感。 */
  static LITTER_BASE_MS={autumn:4,spring:5,summer:14,winter:24};
- litterTarget(o){return Number.isFinite(o?.litterCount)?Math.max(0,Math.round(o.litterCount)):(Atmosphere.LITTER_FALLBACK[o?.season]??3)}
+ litterTarget(o){return Number.isFinite(o?.litterCount)?Math.max(0,Math.round(o.litterCount)):(Atmosphere.LITTER_FALLBACK[o?.season]??0)}
  /** 补充上界 —— **只有档案驱动时才生效**。
   *  ⚠️ 没有 `litterCount` 时返回 Infinity（旧的 30 片硬上限由 update 里那一行保留）。
   *    这条区分不是洁癖：原来秋天的落叶会从初始 19 片**一路堆到 30 片**封顶，
