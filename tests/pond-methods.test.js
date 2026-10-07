@@ -31,8 +31,13 @@ const REQUIRED = [
   'render', 'resize', 'destroy', 'pointer', 'feed', 'updateOptions',
   'drawWater', 'drawLightPool', 'drawShafts', 'drawLightBands', 'drawSparkles',
   'drawEggs', 'drawFood', 'drawRipples', 'drawFeedCircles', 'drawLotus',
-  'drawWinter', 'drawFrost', 'drawIceHole', 'drawWeather', 'drawInsects',
+  'drawFrost', 'drawWeather', 'drawInsects',
 ];
+/* ⚠️ 2026-10-07 又删掉两个方法（用户「删除冬天结冰和留着洞冒泡的设计」）：
+ *   drawWinter  只调 drawFrost，单语义 → 名字已与内容不符，直接删（调用点自己调）
+ *   drawIceHole 冰下泉眼 + 蒸汽
+ *   ⇒ **第三次**削减冬季（① 整池冰层 ② 岸边积雪/雪粒 ③ 泉眼与蒸汽）。
+ *   剩下的是**岸边浮霜**（drawFrost）与**降雪**（drawWeather 里的雪花），两者都不在删除范围。*/
 /* ⚠️ 刻意**不列**的三项（写清单时踩过，别再补回去）：
  *   drawFish  定义在 koi-renderer.js:78，不在 pond.js
  *   update    定义在 simulation.js:534，pond 只调 this.sim.update(dt)
@@ -231,22 +236,44 @@ test('★ render() 每帧重置 floraManifest（冬季不调 drawLotus 会残留
  * 改前 `drawIce()` 画四样东西：整池冰层反光（`iceAlpha` + 全屏 `sheen`）、
  * 8 条裂纹、岸边积雪带、岸边雪粒。用户只要求去掉**冰封**，保留浮霜与泉眼。
  *
+ * ★ 2026-10-07 用户「删除冬天结冰和留着洞冒泡的设计」⇒ **泉眼与蒸汽也删了**。
+ *   本项目**第三次**削减冬季：① 整池冰层 ② 岸边积雪/雪粒 ③ 冰下泉眼 + 蒸汽。
+ *   冬季现在只剩两样：**岸边浮霜**（`drawFrost`）与**降雪**（`drawWeather` 的雪花）。
+ *   ⚠️ `ice` 通道**没删** —— 它现在只驱动降雪强度（`14+18*ice`），与「结冰」无关。
+ *
  * ⚠️ 这条断言存在的意义：那份画法很容易被「顺手优化」回来，
  *   而它有个隐蔽的副作用 —— 冰层是**全屏 alpha 叠加**，
  *   一旦恢复就会把水面整体压亮，冬六档的 ΔE 判据与 `check:terms` 都要重调。
  *   所以在源码层锁死，比在量具层等它把别的判据搞红更省事。
  */
-test('★ 冬季不再有冰层（用户 2026-10-05 要求取消冰封）', () => {
-  const winter = methodBody(SRC, 'drawWinter() {');
-  assert.ok(winter, '找不到 drawWinter()（应取代改前的 drawIce）');
-  assert.ok(/drawFrost\(\)/.test(winter) && /drawIceHole\(t\)/.test(winter),
-    'drawWinter 必须同时保留岸边浮霜与冰下泉眼');
-  assert.ok(/fillRect\(0, 0, width, height\)|fillRect\(0, 0, this\.width, this\.height\)/.test(winter) === false,
-    'drawWinter 里出现了全屏 fillRect ⇒ 冰层反光回来了');
-  assert.ok(!/cracks\b[\s\S]{0,80}stroke/.test(winter),
-    'drawWinter 里画了裂纹 ⇒ 冰层回来了');
-  assert.ok(!/iceAlpha|snowEdge|gradient = ctx\.createLinearGradient\(0, 0, 0, snowEdge/.test(winter),
-    'drawWinter 里出现 iceAlpha / 岸边积雪 ⇒ 冰层回来了');
+test('★ 冬季不再有冰层 / 泉眼 / 蒸汽（2026-10-05 取消冰封 → 2026-10-07 取消泉眼）', () => {
+  /* ⚠️ 断言方式：**方法必须不存在**，而不是「方法里不该画什么」。
+   *   上一版写成「drawWinter 必须调 drawFrost + drawIceHole」—— 删泉眼后它必然红，
+   *   而照着改又会变成「drawWinter 必须调 drawFrost」，把一个**单语义空壳**留下。
+   *   ★ 同型坑（MEMORY）：**断言的形状必须跟着「意图」走**。意图从「保留两种冬季效果」
+   *   变成「两种都删」，那正确的新增断言是**它们没了**。 */
+  for (const gone of ['drawWinter() {', 'drawIceHole() {']) {
+    assert.ok(!methodBody(SRC, gone), `${gone}又回来了 ⇒ 冬季又多了不该有的效果`);
+  }
+  /* ⚠️ 必须用 `methodBodyStripped`：调用点上方的注释里**故意**写着 `drawWinter`/
+   *   `drawIceHole`（说明第三次削减的历史），直接 match 注释必然假红。
+   *   —— 这正是本文件 2026-10-05 立`methodBodyStripped` 的原因，同一坑第二次遇到。 */
+  const render = methodBodyStripped(SRC, 'render() {') || '';
+  assert.ok(!/drawIceHole|drawWinter/.test(render),
+    'render() 还在调 drawWinter / drawIceHole（两个方法都已删除，必然是运行时报错）');
+  assert.ok(/drawFrost\(\)/.test(render),
+    'render() 不调 drawFrost ⇒ 岸边浮霜也一起没了（浮霜不在删除范围内）');
+
+  /* ★ 仍要保留的**冰层回归防护**：冰层是全屏 alpha 叠加 + 裂纹 stroke，
+   *   恢复它会把冬六档的水色与亮度判据全搞乱（见本测试原注释）。
+   *   判据从「某个方法里没有」升级为「**整个文件里没有**」——
+   *   因为现在连承载它的方法都不该存在了。 */
+  const FROST = methodBodyStripped(SRC, 'drawFrost() {') || '';
+  for (const [re, why] of [
+    [/fillRect\(0, 0, (this\.)?width, (this\.)?height\)/, '全屏 fillRect ⇒ 整池冰层/水面反光回来了'],
+    [/cracks\b[\s\S]{0,80}stroke/, '画了裂纹 stroke ⇒ 冰层回来了'],
+    [/iceAlpha|snowEdge/, '出现 iceAlpha / 岸边积雪 ⇒ 冰层回来了'],
+  ]) assert.ok(!re.test(FROST), `drawFrost 里：${why}`);
 });
 
 /** 浮霜不能再被「封冰」门控挡掉 —— 冰层已取消，那道门的前提已消失。 */

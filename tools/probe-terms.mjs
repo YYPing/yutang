@@ -366,8 +366,11 @@ section('⑦ ★ 相邻两节气必须有可见差异');
   //   即"这个通道差一整个量程时，距离增加多少"。这样 24 档的距离才有可比性。
   //
   //   典型档间差取自实测：tint≈0.012、ink≈0.010（占 CAUSTIC.ink 的倍率）、
-  //   leafCount≈2片、litterCount≈1.6 片、snow/cracks/ice/frost≈0.15。
-  const TYPICAL = { tintR: 0.012, tintG: 0.014, tintB: 0.012, causticInk: 0.010, leafCount: 2, litterCount: 1.6, frost: 0.15, ice: 0.15, lotusCount: 0.6, iceHole: 0.01, steam: 0.22, snow: 0.15, cracks: 0.12 };
+  //   leafCount≈2片、litterCount≈1.6 片、snow/ice/frost≈0.15。
+  // ⚠️ `iceHole`/`steam`/`cracks` 已于 2026-10-07 随冰下泉眼一起删除，**不在通道表里**。
+  //   —— `?? 0` 的写法意味着「忘了删也会静默变成 0 通道」，所以必须**从表里移除**
+  //   而不是留在表里给 0。
+  const TYPICAL = { tintR: 0.012, tintG: 0.014, tintB: 0.012, causticInk: 0.010, leafCount: 2, litterCount: 1.6, frost: 0.15, ice: 0.15, lotusCount: 0.6, snow: 0.15 };
   // 每个通道"差满量程"时贡献 100 的距离 ⇒ 通道间可比
   const W = Object.fromEntries(Object.entries(TYPICAL).map(([k, step]) => [k, 100 / (step * step)]));
   const dist = (a, b) => Math.sqrt(Object.keys(W).reduce((s, k) => s + ((a[k] ?? 0) - (b[k] ?? 0)) ** 2 * W[k], 0));
@@ -522,8 +525,8 @@ section('⑨ 渐变插值在渲染参数上也连续');
 
 console.log(`\n通过 ${pass} 项，未通过 ${fail} 项`);
 console.log('\n\x1b[1m24 档渲染参数总表\x1b[0m');
-console.log('节气\t季节\ttintRGB\t\t焦散\t浮叶\t落叶\t霜\t冰\t雪厚\t裂纹');
+console.log('节气\t季节\ttintRGB\t\t焦散\t浮叶\t落叶\t霜\t冰\t雪厚');
 for (const v of VISUALS) {
-  console.log(`${v.term}\t${v.season.slice(0, 2)}\t${n2(v.tintR)},${n2(v.tintG)},${n2(v.tintB)}\t${n2(v.causticInk)}\t${String(v.leafCount).padStart(3)}\t${String(v.litterCount).padStart(3)}\t${n2(v.frost)}\t${n2(v.ice)}\t${n2(v.snow)}\t${n2(v.cracks)}`);
+  console.log(`${v.term}\t${v.season.slice(0, 2)}\t${n2(v.tintR)},${n2(v.tintG)},${n2(v.tintB)}\t${n2(v.causticInk)}\t${String(v.leafCount).padStart(3)}\t${String(v.litterCount).padStart(3)}\t${n2(v.frost)}\t${n2(v.ice)}\t${n2(v.snow)}`);
 }
 process.exit(fail ? 1 : 0);

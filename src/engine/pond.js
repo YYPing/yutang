@@ -471,16 +471,18 @@ export class PondEngine extends KoiRenderer {
      *   大雪~大寒 全为 0 才真的不画。 */
     const tv = this.termVisual;
     if (tv.leafCount > 0 || tv.lotusCount > 0 || tv.budCount > 0 || tv.podCount > 0) this.drawLotus();
-    // ★★★ 冰层已取消（2026-10-05，用户「冬天的冰封效果取消」）。
-    //   改前这里是 `if (ice > 0.02 || weather==='snowy') this.drawIce()`，
-    //   而 `drawIce` 画的是**四样东西**：整池冰层反光 / 裂纹 / 岸边积雪 / 岸边雪粒。
-    //   保留的是**岸边浮霜**（`frost`，秋末最早的信号）与**冰下泉眼**
-    //   （用户明确要过「冬季留一处活水泉眼」），两者都已搬进 `drawWinter()`。
+    // ★★★ 冬季只剩**岸边浮霜**（2026-10-07，用户「删除冬天结冰和留着洞冒泡的设计」）。
+    //   这是本项目**第三次**削减冬季：①2026-10-05 去掉整池冰层 ②2026-10-07 去掉冰下泉眼与蒸汽。
+    //   ⇒ `drawWinter()` 现在是**单语义**方法（只调`drawFrost`），
+    //   历史包袱「一个方法混画四样东西」已彻底消除。
+    //
+    //   ⚠️ 门控只剩 `frost` 一个条件：旧门控是 `frost>0.02 || iceHole>0`，
+    //   后半句随泉眼一起删。**不删的话** `iceHole` 会成为「上游算、下游没人读」
+    //   的死通道 —— 而那正是 `snow`/`cracks` 当年踩过的坑（见 `term-visual.js`）。
     // ⚠️ 降雪（`drawWeather` 的雪花）**没动** —— 那是天气，不是封水面。
-    // ⚠️ 门控从「ice>0.02」改成「frost 或 iceHole 有一个存在就画」：
-    //   旧门控里 `|| weather==='snowy'` 会让**手动选下雪天气**的非冬季档
-    //   也走一遍冰层绘制路径，现在这条路径已不存在，必须同步改掉。
-    if (this.termVisual.frost > 0.02 || this.termVisual.iceHole > 0) this.drawWinter();
+    //   但雪片数仍由 `ice` 插值（`14+18*ice`），所以 `ice` 通道**不能删**，
+    //   它现在唯一的消费者是降雪强度，与「结冰」无关。
+    if (this.termVisual.frost > 0.02) this.drawFrost();
     this.scenery.clouds(ctx, this.atmosphere, this.width, this.height, this.options);
     drawSurfaceRipples(ctx, this.sim.time, this.width, this.height, this.options);
     drawShoreRipples(ctx, this.sim.time, this.width, this.height, this.options, this.isWater);
@@ -1383,50 +1385,13 @@ export class PondEngine extends KoiRenderer {
   }
 
   /**
-   * 冬季的岸边霜与冰下泉眼 —— **不再画冰层**（2026-10-05，用户「冬天的冰封效果取消」）。
-   *
-   * ★★★ 为什么整段重写而不是「改几个系数」：
-   *   改前这个方法叫 `drawIce`，实测画了**四样东西**：
-   *     ① 整池冰层 sheen（`iceAlpha = 0.30+0.70*ice` 的全屏反光）
-   *     ② 8 条裂纹（`cracks` 档案控制条数与线宽）
-   *     ③ 岸边积雪带（`snow` 控制厚度、密度、流挂）
-   *     ④ 岸边雪粒（12+46*snow 粒椭圆）
-   *   用户要取消的是**冰封**（① ② ④ 属于"封住水面"这件事），
-   *   但**岸边浮霜**是秋末最早的信号（霜降 frost=.8 而 ice=.15）、
-   *   **泉眼**是用户明确要求保留的（「冬季留一处活水泉眼」）——
-   *   三者混在一个方法里，必须拆开。
-   *
-   * ★★★ 判据影响面（改前先查的，避免踩塌量具）：
-   *   · 档案 `almanac.js` 的 `ice/frost/deepWinter/snow/cracks` **一律不动**
-   *     —— 存档、24 档物候表、`term-visual.js` 的映射都继续读它们。
-   *   · `check:frost` 测的是 `frost` 通道的贡献，与本方法无关（它只碰 drawFrost）。
-   *   · `check:terms` 的 24 档像素差分会变（冬六档不再有冰层反光），
-   *     但那些判据量的是**档间差分**而非绝对值，且冬六档的 flora 全 0、
-   *     水色仍随 tint 变化 ⇒ 大概率不受影响，回归时实测。
-   *   · `probe-terms.mjs` ① 段查「渲染层出现过 `.ice`」——
-   *     本方法仍读 `v.frost` 与 `v.iceHole`，`ice` 也不再出现于绘制路径，
-   *     所以要么改成读 `iceHole`（本就存在），要么保留一句 `v.ice` 的引用。
-   *     **处置：保留 `const ice = v.ice;` 的一句显式读取并用于注释性判断**，
-   *     这样「上游算了、下游没用」的老坑不会因为这次删代码而重新出现。
-   *
-   * 保留的浮霜 → 画在 `ice < 0.55`（薄冰阶段）这个原门控**也要去掉**：
-   *   既然不再有冰层，霜就能一直画；否则大雪/冬至/小寒/大寒（ice=1）
-   *   会被这道门整个跳过，霜降之后**一档霜都看不到** —— 反而丢了秋末信号。
-   */
-  drawWinter() {
-    const v = this.termVisual;
-    const t = this.options.reducedMotion ? 0 : this.sim.time;
-    /* ★ 上游仍在算的冰参数在这里显式读一次（当前只用于分支，不产生绘制）。
-     *   保留这个读取是为了让「档案算了 → 渲染层知道」这条链可被源码判据查到，
-     *   避免重演 `snow`/`iceHole` 当年「算了半年一次没画」的坑。
-     *   若将来要恢复冰层（如「薄冰期可开关」），旋钮就在这个 ice 上。 */
-    const ice = v.ice;
-    if (ice < 0) return;   // 恒不成立，纯为让 ice 成为「被读过的量」
-    this.drawFrost();
-    this.drawIceHole(t);
-  }
-  /**
    * 岸边浮霜 —— `frost` 通道的消费者（2026-10-04 接入）。
+   *
+   * ★★★ 2026-10-07：`drawWinter()` 与 `drawIceHole()` **已整体删除**
+   *   （用户「删除冬天结冰和留着洞冒泡的设计」），调用点改为直接调 `drawFrost()`。
+   *   这是本项目第三次削减冬季：① 去掉整池冰层 ② 去掉冰下泉眼与蒸汽
+   *   ③（本次）去掉 `drawWinter` 这层中转。
+   *   ⇒ 冬季绘制从此**只剩一个语义**：岸边浮霜。降雪仍在 `drawWeather` 里（那是天气）。
    *
    * ★ 为什么要独立于 `snow`：`frost`（霜）与 `ice`（冰）是**两件事**。
    *   档案里霜降 frost=.8 而 ice=.15 —— 正对应"早上有一层白霜，池子还没上冻"。
@@ -1473,55 +1438,6 @@ export class PondEngine extends KoiRenderer {
       ctx.moveTo(x, y);
       ctx.lineTo(x + len, y + (atTop ? len * 0.22 : -len * 0.22));
       ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  /**
-   * 冬季的「活水泉眼」—— 深冬里那一小块不结冰的活水。
-   *
-   * ★ 这是用户明确要的（"冬季留一处活水泉眼"）。参数在 `term-visual.js` 里
-   *   就算好了（`iceHole` 半径 / `steam` 蒸汽强度），但上一轮只算不画。
-   * ⚠️ 泉眼半径**不能只由 `ice` 推**：`ice` 在大雪/冬至/小寒/大寒全是 1（饱和），
-   *   那样四档的泉眼会一模一样。真正的旋钮是 `deepWinter`（深冬序号）。
-   *
-   * ⚠️⚠️ 冰层已于 2026-10-05 取消，所以这圈水现在**不再是被冰"挖开"的洞**，
-   *   而是一块**自己在冒热气的暖泉**。因此：
-   *   ① 位置从「左下 .235/.735」保留（仍要避开右下荷叶簇），但不再有冰盖，
-   *      视觉上就是深冬水面上的一圈暖色 + 蒸汽 —— 更合理，不需要额外遮挡。
-   *   ② 破口的「白色毛边」改成暖泉边缘的一圈**薄霜圈**（保留 `cracks` 驱动：
-   *      深冬越深，霜圈越明显），这样 `cracks` 通道仍然被消费，不回到"算了不画"。
-   */
-  drawIceHole(t) {
-    const ctx = this.ctx;
-    const v = this.termVisual;
-    if (!(v.iceHole > 0)) return;
-    // 位置放在左下偏中 —— 避开右下角的荷叶簇（drawLotus 的锚点在 .76~.835 × .9）。
-    const cx = this.width * 0.235, cy = this.height * 0.735;
-    const r = v.iceHole * this.width;
-    ctx.save();
-    // 活水：用不透明的水色盖住底图（深冬时这一圈比周围更暖更亮）。
-    const water = ctx.createRadialGradient(cx, cy, r * 0.15, cx, cy, r);
-    water.addColorStop(0, 'rgba(38,86,88,.92)');
-    water.addColorStop(0.72, 'rgba(44,94,94,.80)');
-    water.addColorStop(1, 'rgba(60,110,108,.55)');
-    ctx.fillStyle = water;
-    ctx.beginPath(); ctx.ellipse(cx, cy, r, r * 0.74, -0.22, 0, TAU); ctx.fill();
-    // 泉眼边缘的薄霜圈（深冬越深越明显 —— 仍由 `cracks` 驱动）
-    ctx.strokeStyle = `rgba(238,251,246,${0.30 + 0.34 * v.cracks})`;
-    ctx.lineWidth = 1.15;
-    ctx.beginPath(); ctx.ellipse(cx, cy, r * 1.06, r * 0.79, -0.22, 0, TAU); ctx.stroke();
-    // 蒸汽：三缕随时间起伏的淡白（reducedMotion 时静止）
-    const puffs = 3;
-    for (let i = 0; i < puffs; i++) {
-      const ph = t * 0.6 + i * 2.1;
-      const rise = ((ph % 3) / 3);
-      const py = cy - r * 0.5 - rise * r * 1.55;
-      const px = cx + Math.sin(ph * 0.9) * r * 0.30 * (0.4 + 0.6 * rise);
-      const pr = r * (0.30 + 0.52 * rise);
-      // 越升越淡（散开）
-      ctx.fillStyle = `rgba(238,250,248,${0.16 * v.steam * (1 - rise)})`;
-      ctx.beginPath(); ctx.ellipse(px, py, pr, pr * 0.82, 0, 0, TAU); ctx.fill();
     }
     ctx.restore();
   }
