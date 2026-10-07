@@ -21,6 +21,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { termProfile, SOLAR_TERMS, termSeason, blendTerm } from '../src/engine/almanac.js';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** 读引擎源码（消费链类判据用）。
+ *  ⚠️ 默认**剥掉行注释** —— 本文件每条护栏的说明文字里都写着被断言的标识符
+ *  （比如「scenery.rain 必须读 a.rainDrops」这句话本身含 `a.rainDrops`），
+ *  不剥注释的话 `assert.match(SRC, /a\.rainDrops/)` 会被自己的注释命中 ⇒ 恒绿假绿。
+ *  需要匹配注释时显式传 `{ raw: true }`。 */
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const read = (rel, { raw = false } = {}) => {
+  const src = readFileSync(join(ROOT, rel), 'utf8');
+  return raw ? src : src.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+};
 
 /** 物候序（季内真实顺序）。⚠️ 不能从 SOLAR_TERMS filter 出来——那是历法序、跨年排布。 */
 const SEASON = {
@@ -340,6 +354,130 @@ test('★ P0-2 实测结论：立夏用的是夏季底图（不是春季），�
       + '「立夏右上角春桃」是真的串味，需要查 resolveTermImage 的降级链');
   }
   assert.equal(termSeason('清明'), 'spring', '清明应属 spring（对照组：确认映射本身有效）');
+});
+
+/* ───── 护栏七：春六档的雨丝物候（P2-2 附带项：雨水不下雨） ─────
+ *
+ * 现象（清单第三节）：春 6 张「雨水不下雨、惊蛰不抽芽」。
+ *
+ * ⚠️ 「惊蛰不抽芽」**已不成立**：`almanac` 惊蛰有 `bud: .45`（9苞）、
+ *   且 2026-10-05 已把惊蛰 `leaf .35→.17`（「惊蛰只有新芽」）。
+ *   剩下的是**雨水确实不下雨**这一条。
+ *
+ * ★ 关键设计裁决：**雨丝不能挂在 `weather` 上**。
+ *   `drawWeather` 里雨是**天气门控**（`weather==='rainy'`），
+ *   而天气来自城市天气 API 或用户设置 —— 也就是说
+ *   **「雨水这一档下雨」这件事不该由天气决定，而该由节气决定**。
+ *   否则「演示轮转到雨水」却没下雨，正是清单说的那个问题。
+ *
+ *   ⇒ 正解与降雪同构（`pond.js` 已有先例）：
+ *     雪片数在**非 snowy 天气**也按 `v.ice` 连续插值（`Math.round(14+18*ice)`）
+ *     —— 天气只决定「要不要更猛」，节气决定「有没有」。
+ *   雨同理：新增 `rain` 通道（档案里的「雨势」），雨天在此基础上加量。
+ */
+test('★ P2-2 雨水必须有雨势（清单「雨水不下雨」），且惊蛰抽芽已在档案里', () => {
+  /* 惊蛰「抽芽」这一半已由现有档案满足（防回退）。 */
+  assert.ok((termProfile('惊蛰').bud ?? 0) > 0,
+    '惊蛰 bud=0 ⇒ 「惊蛰不抽芽」那条又成立了（参考图写「嫩绿新叶展开·零星花苞」）');
+  /* ★ 雨势必须是一条**独立于 weather** 的档案通道。
+   * 这里锁的是「档案层要有这条维」—— 由 `almanac-pheno` 的档案齐全性负责。
+   * 具体判据放到 `check-rain-fall.cjs`（像素级：雨丝是否真的画在雨水档）。
+   */
+  const ws = termProfile('雨水');
+  /* 雨水是全年**降水最集中**的一档（华南梅雨、华北春雨），雨势必须显著。 */
+  assert.ok(ws.warmth >= 0.35 && ws.warmth <= 0.45,
+    `雨水 warmth=${ws.warmth} 应在 .35~.45（参考图「残雪初融」= 仍冷但已回暖）`);
+  /* ★ 雨势本身：雨水必须是**全年峰值**，且冬夏必须为 0。
+   *   这两条缺一不可 ——
+   *   只断言「雨水>0」的话，立夏给 .3 也能过（而清单抱怨的正是「该下时不下」）；
+   *   只断言「雨水最大」的话，给个 .3 的最大值也过（那还是不下雨）。 */
+  assert.ok((ws.rain ?? 0) >= 0.9, `雨水rain=${ws.rain} 应≥.9（全年降水峰值档）`);
+  for (const t of ['大雪', '冬至', '小寒', '大寒', '立夏', '大暑', '立秋']) {
+    assert.equal(termProfile(t).rain ?? 0, 0,
+      `${t} rain=${termProfile(t).rain} 应为 0/无键 —— 雨势不是常开通道（防无脑泛雨）`);
+  }
+});
+
+/* ───── 护栏八：节气雨必须真的被渲染层消费（P2-2「雨水不下雨」的另一半） ─────
+ *
+ * ★★ 为什么档案有 `rain` 维**不等于**问题解决了。
+ *   本项目已经踩过三次同一个坑，形态各不相同：
+ *     ① `frost` —— `term-visual.js` 一直算得出，`drawFrost` 一次都没读（"算了不画"）；
+ *     ② `bud`/`pod` —— `blendTerm` 的返回对象里压根没这两个键；
+ *     ③ `ice`/`snow` —— 冰层取消后 `ice` 变成"算了没人读"的死通道。
+ *   ⇒ 这里锁的是**消费链的每一环**都存在，且环环相扣（不许只改一环）。
+ *
+ * 链路：`almanac.rain` → `blendTerm` 插值 → `term-visual` 输出 `rain`
+ *       → `pond.render` 调 `atmosphere.syncRain` → `atmosphere.termDrops`
+ *       → `scenery.rain` 读 `rainDrops`（不是 `drops`！）→ 画在水面涟漪之上。
+ */
+test('★ P2-2 节气雨消费链必须环环相扣（档案→blend→翻译层→atmosphere→绘制）', () => {
+  const src = {
+    visual: read('src/engine/term-visual.js'),
+    pond: read('src/engine/pond.js'),
+    atmo: read('src/engine/atmosphere.js'),
+    scenery: read('src/engine/scenery.js'),
+  };
+  /* ① 翻译层把 `rain` 输出出去（`?? 0` 兜底老存档）。 */
+  assert.match(src.visual, /const rain = clamp01\(p\.rain \?\? 0\)/,
+    'term-visual.js 没有从档案取 rain（老存档/中性档案会拿到 undefined）');
+  /* ② 渲染层每帧同步（不能只在 updateOptions 里对一次 —— 渐变模式下会停在旧值）。 */
+  assert.match(src.pond, /atmosphere\.syncRain\(this\.termVisual\.rain\)/,
+    'pond.render 没调 syncRain ⇒ 雨丝数量停在初始值');
+  /* ③ atmosphere 真的有 termDrops 通道，且 syncRain 会写它。 */
+  assert.match(src.atmo, /syncRain\(amount\)\{/, 'atmosphere.syncRain 不存在');
+  assert.match(src.atmo, /this\.termDrops\s*=/, 'syncRain 没有写 termDrops ⇒ 算了不画');
+  /* ④★ 最关键的一环：`scenery.rain` 必须读 `rainDrops`。
+   *   读 `a.drops` 是**第一版真实犯的错** —— `drops` 只在 `wet(weather)` 时有内容，
+   *   于是「雨水档 + 晴天」画出的雨丝恒为 0 条，量具会全绿而画面没雨。 */
+  const drawLine = src.scenery.split('\n').find((l) => l.includes('for(const d of a.')) || '';
+  assert.ok(drawLine.includes('a.rainDrops'),
+    `scenery.rain 的雨丝循环读的是 ${drawLine.trim() || '(没找到)'}，必须读 a.rainDrops（天气雨 drops + 节气雨 termDrops 的合集）`);
+});
+
+test('★ P2-2 同帧一致性：下雨时不得同时出蜻蜓与阳光十字', () => {
+  const pond = read('src/engine/pond.js');
+  assert.match(pond, /this\.termVisual\.rain >= 0\.05\) return;/,
+    'drawInsects 的门控没读 rain ⇒ 雨水档会同时出现雨丝和蜻蜓');
+  assert.match(pond, /weather === 'sunny' && !night && this\.termVisual\.rain < 0\.05/,
+    '阳光十字（drawWeather）没被rain 门控 ⇒ 雨天出太阳光斑');
+  assert.match(pond, /this\.termVisual\.rain < 0\.05\) \{/,
+    '光池/光柱没被 rain 门控 ⇒ 雨天仍有阳光光池');
+  assert.match(pond, /0\.10 \* termRain/,
+    '没有按 rain 压暗水面 ⇒ 亮色雨丝叠在晴天水色上读成「白色竖线」而不是雨');
+});
+
+/* ───── 护栏九：量具的桩必须与真实对象同构（P2-2踩到的 TypeError） ─────
+ *
+ * 现象：`scenery.rain` 改读 `a.rainDrops` 后，`check-water-rings.js` 报
+ *   `TypeError: a.rainDrops is not iterable`。
+ *
+ * ★★ 为什么这类错特别难查：量具抛的是 TypeError，**看起来像实现坏了**，
+ *   第一反应会去查 `scenery.js`。而真实原因是**桩落后于实现** ——
+ *   桩是手搓的字面量对象（`{drops:[], flash:0, …}`），
+ *   `Atmosphere` 加字段时没人会想到去改它。
+ *   ⇒ 这里锁住：`Atmosphere` 的「形状」与桩里写的字段必须对得上。
+ *
+ * ⚠️ 判据选的是**具体字段清单**而不是「跑一遍量具」——
+ *   跑量具需要 dev server，单测层拿不到；而字段清单是纯文本比对，零依赖。
+ */
+test('★ P2-2 量具桩必须与 Atmosphere 同构（防「桩落后于实现」的 TypeError）', () => {
+  const stub = read('tools/check-water-rings.js');
+  const atmo = read('src/engine/atmosphere.js');
+  /* 桩里出现的每个 `atmosphere` 字段都必须在 `Atmosphere` 里真实存在。 */
+  for (const f of ['drops', 'termDrops', 'impacts', 'flash', 'rainHits', 'landings']) {
+    assert.match(atmo, new RegExp(`this\\.${f}\\s*=`),
+      `Atmosphere 没有 ${f} 字段 —— 若桩里写了它，说明桩与实现已不同构`);
+    assert.ok(stub.includes(`${f}:`) || stub.includes(`this.${f}`),
+      `check-water-rings.js 的桩缺 ${f}（或没复刻它的 getter）`);
+  }
+  /* ★ `rainDrops` 是 **getter**，桩必须用 `Object.defineProperty` 复刻 ——
+   *   直接写 `rainDrops: []` 会得到一个**永远为空**的数组 ⇒
+   *   雨丝恒画 0 条而量具全绿（比抛 TypeError 更坏：它伪装成成功）。 */
+  assert.match(stub, /defineProperty\(\s*a\s*,\s*'rainDrops'/,
+    '桩里的 rainDrops 必须用 defineProperty 复刻 getter；写成普通字段会恒为空数组');
+  assert.ok(/get\(\)\s*\{\s*return this\.termDrops\.length\s*\?/.test(stub),
+    '桩的 rainDrops getter 语义与实现不一致（实现是 termDrops 为空时返回 drops 本体）');
 });
 
 /* ───── 护栏四：冬季水面落叶（用户评审清单 P0-1，2026-10-07） ─────

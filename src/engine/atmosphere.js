@@ -3,13 +3,19 @@ export function windStrength(weather,season){return ({stormy:1.7,rainy:.85,cloud
 const wet=w=>w==='rainy'||w==='stormy';
 /** Overscan both ends of a streak: rain covers the viewport, including its bottom edge. */
 export function rainPosition(drop,width,height,options={}){
- const slant=windStrength(options.weather,options.season)*.25;
+ // ★★ 2026-10-07（P2-2）：节气雨（`rainAmount>0` 但天气不是雨）也要有**斜度**。
+ //   `windStrength` 在sunny 下只有 .28+季节加成 ⇒slant≈.09，雨丝几乎垂直，
+ //   读成「垂直的白线」而不是雨。⇒ 有节气雨时额外补 .35 的风。
+ //   ⚠️ 只在 `rainAmount>0` 时加：不能改`windStrength` 本身 ——
+ //   它同时驱动落叶漂移与浮叶速度，无条件加会连带改变秋天的落叶手感。
+ const base=windStrength(options.weather,options.season);
+ const slant=(base+(Number.isFinite(options.rainAmount)&&options.rainAmount>0?.35:0))*.25;
  const fall=drop.height*(1-Math.min(1,drop.age/drop.life)),margin=drop.height*slant+12;
  return {x:drop.u*(width+margin*2)-margin+fall*slant,y:drop.v*(height+drop.height)-fall,slant};
 }
 /** Bounded, time-based weather particles. Rain and leaves each own their landing event. */
 export class Atmosphere{
- constructor(options={},random=Math.random){this.random=random;this.options={};this.time=0;this.leaves=[];this.drops=[];this.impacts=[];this.flash=0;this.landings=0;this.rainHits=0;this.configure(options)}
+ constructor(options={},random=Math.random){this.random=random;this.options={};this.time=0;this.leaves=[];this.drops=[];this.termDrops=[];this.impacts=[];this.flash=0;this.landings=0;this.rainHits=0;this.configure(options)}
  point(){return {u:.18+this.random()*.62,v:.12+this.random()*.72}}
  drop(){return {u:this.random(),v:this.random(),age:0,life:.65+this.random()*.7,seed:this.random(),height:140+this.random()*140}}
  leaf(falling=false){const p=this.point();return {...p,phase:falling?'fall':'float',age:0,life:95+this.random()*90,fallTime:2.8+this.random()*1.8,angle:this.random()*TAU,seed:this.random(),size:(this.options.season==='spring'?5:12)+this.random()*(this.options.season==='spring'?6:13),variant:Math.floor(this.random()*3),fromRight:this.random()>.5}}
@@ -39,6 +45,39 @@ export class Atmosphere{
  static LITTER_FALLBACK={autumn:19,spring:16,summer:6,winter:0};
  /* 补充间隔基数（秒），沿用原季节手感。 */
  static LITTER_BASE_MS={autumn:4,spring:5,summer:14,winter:24};
+ /*★★ 2026-10-07（P2-2「雨水不下雨」）新增 `termDrops` 通道。
+  *   根因：雨丝是**天气门控**（`wet(weather)` 才建 drops），而天气来自城市天气 API
+  *   或用户设置 ⇒「雨水这一档该下雨」这件事被**交给了天气**，演示轮转到雨水却晴天。
+  *   ⇒ 正解与降雪同构（`pond.js` 的 `Math.round(14+18*v.ice)` 在非 snowy 天气也画）：
+  *     **天气决定「要不要更猛」，节气决定「有没有」。**
+  *
+  * ★ 为什么**另开一个数组**而不是把两条通道合进 `this.drops`：
+  *   `drops` 的重建条件是「天气/画质/reducedMotion 变了」（在 `configure` 里），
+  *   而节气雨势在渐变模式下**每帧都在变**。若并进去，要么每帧重建
+  *   （⇒ 全部雨滴位置被重置，视觉上「雨点整体闪一下」），
+  *   要么给 `configure` 加逐帧分支（⇒ 与它「一次性铺满」的语义冲突）。
+  *   拆成两个数组后：天气雨仍由 configure 一次性铺满，节气雨只**增删尾部**，
+  *   两条通道各管一段、互不重置已有雨滴。 */
+ static TERM_RAIN_MAX=44;   // 节气雨满档（雨水=1）的雨丝条数。低于天气雨 72 —— 物候雨≠暴雨
+ /** 节气雨目标条数。老存档/单测直接 new Atmosphere 时没有 `rainAmount` ⇒ 0（保持原样）。 */
+ termRainTarget(o){
+  if(!Number.isFinite(o?.rainAmount))return 0;
+  const scale=(o.reducedMotion?.3:1)*(o.quality==='low'?.5:1);
+  return Math.max(0,Math.round(o.rainAmount*Atmosphere.TERM_RAIN_MAX*scale));
+ }
+ /** 节气雨与天气雨的合集 —— `update` 的老化/落水与 `scenery.rain` 的绘制都读它。
+  *  ⚠️ 没有节气雨时**直接返回 `drops` 本体**（不做 concat，避免每帧新建数组）。 */
+ get rainDrops(){return this.termDrops.length?this.drops.concat(this.termDrops):this.drops}
+ /** 每帧同步节气雨势（与 `syncLitter` 同构：值不变直接返回，只增删尾部不重铺）。 */
+ syncRain(amount){
+  if(!Number.isFinite(amount))return;
+  this.options.rainAmount=Math.max(0,Math.min(1,amount));
+  const target=this.termRainTarget(this.options);
+  if(target===this.termDrops.length)return;
+  this.termDrops=target>this.termDrops.length
+   ?Array.from({length:target-this.termDrops.length},()=>{const d=this.drop();d.age=this.random()*d.life;return d})
+   :this.termDrops.slice(0,target);
+ }
  litterTarget(o){return Number.isFinite(o?.litterCount)?Math.max(0,Math.round(o.litterCount)):(Atmosphere.LITTER_FALLBACK[o?.season]??0)}
  /** 补充上界 —— **只有档案驱动时才生效**。
   *  ⚠️ 没有 `litterCount` 时返回 Infinity（旧的 30 片硬上限由 update 里那一行保留）。
@@ -87,7 +126,7 @@ export class Atmosphere{
  update(dt,width,height,fish=[],hand={},isWater=()=>true){
   dt=Math.max(0,Math.min(.05,dt));this.time+=dt;const events=[],o=this.options,wind=windStrength(o.weather,o.season);
   this.impacts=this.impacts.filter(p=>(p.age+=dt)<p.life);
-  for(const d of this.drops){d.age+=dt;if(d.age>=d.life){const p=rainPosition(d,width,height,o);if(p.x>=0&&p.x<=width&&p.y>=0&&p.y<=height&&isWater(p.x,p.y))this.impact(p.x,p.y,'rain');Object.assign(d,this.drop())}}
+  for(const d of this.rainDrops){d.age+=dt;if(d.age>=d.life){const p=rainPosition(d,width,height,o);if(p.x>=0&&p.x<=width&&p.y>=0&&p.y<=height&&isWater(p.x,p.y))this.impact(p.x,p.y,'rain');Object.assign(d,this.drop())}}
   this.flash=Math.max(0,this.flash-dt*.22);
   if(o.weather==='stormy'&&(this.nextThunder-=dt)<=0){this.nextThunder=23+this.random()*22;this.flash=o.reducedMotion?0:.075;events.push({delay:900+this.random()*1200})}
   if(o.reducedMotion)return events;

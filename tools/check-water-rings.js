@@ -133,9 +133,17 @@ function captureRipple() {
 function captureRain() {
   const { ctx, rings } = recorder();
   const a = {
-    drops: [], flash: 0, rainHits: 0, landings: 0,
+    // ★ 2026-10-07（P2-2）：`scenery.rain` 的雨丝循环改读 **`a.rainDrops`**
+    //   （天气雨 drops + 节气雨 termDrops 的合集），不再是 `a.drops`。
+    //   ⇒ 桩对象必须与真实 `Atmosphere` **同构**，否则量具直接抛
+    //   `a.rainDrops is not iterable` —— 这类「桩落后于实现」的坑很难查，
+    //   因为量具报的是 TypeError，看起来像实现坏了。
+    //   `rainDrops` 是 **getter**（`termDrops` 为空时返回 `drops` 本体），
+    //   所以桩里要用 `Object.defineProperty` 复刻，不能直接写个字段。
+    drops: [], termDrops: [], flash: 0, rainHits: 0, landings: 0,
     impacts: [{ x: 130, y: 130, age: 0.4, life: 1.35, kind: 'rain' }],
   };
+  Object.defineProperty(a, 'rainDrops', { get() { return this.termDrops.length ? this.drops.concat(this.termDrops) : this.drops; } });
   Scenery.prototype.rain.call({}, ctx, a, 260, 260, { night: null, season: 'autumn' });
   return rings;
 }

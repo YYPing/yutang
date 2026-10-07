@@ -446,6 +446,11 @@ export class PondEngine extends KoiRenderer {
     //   ⇒ 交节后落叶数会停在旧值（用户可见：冬至还在飘 3 片秋叶）。
     //   这里每帧同步，代价只是一个整数比较。
     this.atmosphere.syncLitter(this.termVisual.litterCount);
+    // ★★ 节气雨势同步（P2-2「雨水不下雨」，2026-10-07）。与 `syncLitter` 同理：
+    //   档案在渐变模式下每帧都在变，只在 `updateOptions` 里对一次会停在旧值。
+    //   `scenery.rain`（render 里第 49x 行）随后读 `atmosphere.rainDrops` 把雨丝画在
+    //   水面涟漪**之上** —— 与天气雨同一条通路，不新增第二个绘制入口。
+    this.atmosphere.syncRain(this.termVisual.rain);
     // ★ 把渲染参数也放进传给 landscape 的那份 options —— shader 要读它做水色。
     //   不能直接改 this.options：那会让 useMemo 的引用比对失效、也可能被存档逻辑看到。
     this.landscape.render(this.sim.time, { ...this.options, termVisual: this.termVisual }, this.sim.hand);
@@ -511,7 +516,7 @@ export class PondEngine extends KoiRenderer {
       moon.addColorStop(0, `rgba(176,224,230,${0.10 * dim})`); moon.addColorStop(1, 'rgba(131,204,215,0)');
       ctx.fillStyle = moon; ctx.fillRect(0, 0, this.width, this.height);
     }
-    if (weather === 'sunny') {
+    if (weather === 'sunny' && this.termVisual.rain < 0.05) {
       // §10.5 白天「阳光照耀」= 高斯光池 + 偶发梦幻光柱。
       // 老代码这里是**一条硬编码的** `.10` 径向、位置 `y .16h` —— 附录 A.2 #1/#2
       // 两条坑写的正是它（"光池铺满无明暗" / "压最亮处烧白"）。现在峰值/σ/位置
@@ -522,6 +527,17 @@ export class PondEngine extends KoiRenderer {
     } else if (weather === 'cloudy' || weather === 'rainy' || weather === 'stormy') {
       const a = weather === 'stormy' ? .25 : weather === 'rainy' ? .18 : .09;
       ctx.fillStyle = `rgba(${weather === 'stormy' ? '22,40,58' : weather === 'rainy' ? '33,62,69' : '41,70,66'},${a})`;
+      ctx.fillRect(0, 0, this.width, this.height);
+    }
+    // ★★ 节气雨的环境压暗（P2-2，2026-10-07）。
+    //   为什么必须压：雨丝是**亮色**短线（`rgba(230,247,240,…)`），叠在未压暗的
+    //   晴天水色上会读成「白天飘着白色竖线」—— 存在但不像雨。
+    //   ⇒ 上面的天气罩帮不上忙（天气是 sunny 时压根不进那个分支），
+    //     所以这里按`rain` 另加一层，量级刻意压在天气雨之下（.10 vs .18）：
+    //     **物候雨是"天要变了"，天气雨才是"正在下"**。
+    const termRain = this.termVisual.rain;
+    if (termRain >= 0.05) {
+      ctx.fillStyle = `rgba(33,62,69,${0.10 * termRain})`;
       ctx.fillRect(0, 0, this.width, this.height);
     }
     if (this.options.quality === 'low') return;
@@ -1484,7 +1500,7 @@ export class PondEngine extends KoiRenderer {
         ctx.fillStyle = gradient; ctx.fillRect(-this.height, -this.height, this.height * 2, this.height * 2); ctx.restore();
       }
     }
-    if (weather === 'sunny' && !night) {
+    if (weather === 'sunny' && !night && this.termVisual.rain < 0.05) {
       for (let i = 0; i < 19; i++) {
         const m = this.motes[i + 20];
         const opacity = Math.max(0, Math.sin(t * 0.75 + m.seed * 35)) ** 6 * 0.54;
@@ -1498,9 +1514,13 @@ export class PondEngine extends KoiRenderer {
   }
 
   drawInsects() {
-    const ctx = this.ctx, { night, weather, season, reducedMotion } = this.options;
-    const t = reducedMotion ? 0 : this.sim.time;
-    if (['rainy','stormy','snowy'].includes(weather)) return;
+   const ctx = this.ctx, { night, weather, season, reducedMotion } = this.options;
+   const t = reducedMotion ? 0 : this.sim.time;
+   //★★ 门控补上节气雨（P2-2，2026-10-07）：原来只看 `weather`，
+   //   于是「雨水档 + 晴天」会同时出现**雨丝和蜻蜓**——同一帧自相矛盾。
+   //   ⚠️ 阈值 .05 而不是 `>0`：0.02 级的微量雨势不该把整池昆虫灭掉。
+   if (this.termVisual.rain >= 0.05) return;
+   if (['rainy','stormy','snowy'].includes(weather)) return;
     if (night && season !== 'winter') {
       for (let i = 0; i < 12; i++) {
         const m = this.motes[i + 60];

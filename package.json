@@ -67,6 +67,7 @@
     "check:term:fade": "node tools/check-term-fade.cjs",
     "check:lotus": "node tools/check-lotus.cjs",
     "check:frost": "node tools/check-frost-ui.cjs",
+    "check:rain": "node tools/check-rain-fall.cjs",
     "probe:desktop": "node tools/probe-desktop-boot.cjs",
     "check:daylight": "node tools/check-daylight.cjs"
   },

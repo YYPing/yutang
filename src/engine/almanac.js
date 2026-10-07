@@ -106,19 +106,29 @@ const TERM_PROFILE = Object.freeze({
   冬至: { warmth: .10, lotus: 0, bud: 0.00,  pod: 0.05,   leaf: 0,   litter: 0,   frost: 1,   ice: 1,   deepWinter: .90 },
   小寒: { warmth: .05, lotus: 0, bud: 0.00,  pod: 0.03,   leaf: 0,   litter: 0,   frost: 1,   ice: 1,   deepWinter: 1.0 },
   大寒: { warmth: .02, lotus: 0, bud: 0.00,  pod: 0.02,   leaf: 0,   litter: 0,   frost: 1,   ice: .95, deepWinter: .97 },
-  立春: { warmth: .30, lotus: 0, bud: 0.00,  pod: 0.00,   leaf: .1,  litter: .15, frost: .6,  ice: .45 , deepWinter: .45 },
-  雨水: { warmth: .40, lotus: 0, bud: 0.12,  pod: 0.00,   leaf: .2,  litter: .1,  frost: .2,  ice: .12 , deepWinter: .12 },
+  // ★★ 2026-10-07 新增 `rain`（雨势）维（P2-2「雨水不下雨」）。
+  //   ★ 为什么雨势必须挂在**节气档案**上，而不能挂在 `weather` 上：
+  //     `drawWeather` 里雨是**天气门控**（`weather==='rainy'`），而天气来自
+  //     城市天气 API 或用户设置 ⇒「这一档该下雨」这件事被交给了天气。
+  //     于是「演示轮转到雨水却没下雨」—— 正是清单点出的问题。
+  //   ⇒ 正解与降雪同构（`pond.js` 已有先例）：**天气决定「要不要更猛」，
+  //     节气决定「有没有」**。雪片数在非 snowy 天气也按 `ice` 连续插值，
+  //     雨同理：雨天在此基础上加量，非雨天只要 `rain>0` 就画。
+  //   取值依据（参考图 `REF_POND`）：雨水「残雪初融·水底新芽」= 湿冷有雨，
+  //   而惊蛰「嫩绿新叶展开」= 雨季未至、只有零星细雨 ⇒ 显著低于雨水。
+  立春: { warmth: .30, lotus: 0, bud: 0.00,  pod: 0.00,   leaf: .1,  litter: .15, frost: .6,  ice: .45 , deepWinter: .45, rain: .25 },
+  雨水: { warmth: .40, lotus: 0, bud: 0.12,  pod: 0.00,   leaf: .2,  litter: .1,  frost: .2,  ice: .12 , deepWinter: .12, rain: 1   },
   // ★ leaf 从 .35 降到 .17（2026-10-04，`tests/almanac-pheno.test.js` 抓到的真缺陷）。
   //   原值让春/夏的浮叶量走出「雨水 .20 → 惊蛰 .35 → 春分 .25」的**先升后降**，
   //   而需求 104–105 行写的是 惊蛰·春分「新芽、小花苞尖 / 新叶初铺」→
   //   清明·谷雨「新叶满铺」，即惊蛰只有芽（浮叶很少）、到谷雨才铺满。
   //   参考图也明确「春分的叶已比惊蛰大」。.35 让惊蛰凭空多出 4 片大浮叶，
   //   与春分只差 2 片 —— 画面上「惊蛰」和「春分」几乎一样，正是用户说的"都一样"。
-  惊蛰: { warmth: .50, lotus: .05, bud: 0.45,  pod: 0.00,leaf: .17, litter: 0,   frost: 0,   ice: 0 },
+  惊蛰: { warmth: .50, lotus: .05, bud: 0.45,  pod: 0.00,leaf: .17, litter: 0,   frost: 0,   ice: 0, rain: .35 },
 });
 
 /** 找不到时的中性档案（比"报错"好：画面照常，只是少了物候细节）。 */
-const NEUTRAL = Object.freeze({ warmth: .6, lotus: 0, leaf: .3, litter: .2, frost: 0, ice: 0 });
+const NEUTRAL = Object.freeze({ warmth: .6, lotus: 0, leaf: .3, litter: .2, frost: 0, ice: 0, rain: 0 });
 
 /** 线性插值。`t` 会被夹到 [0,1]，所以调用方不必自己保证。 */
 const mix = (a, b, t) => a + (b - a) * Math.max(0, Math.min(1, t));
@@ -179,6 +189,10 @@ export function blendTerm(term, t = 0) {
     //   而这正好是 §八「节气切换用渐变」要避免的东西。
     //   非冬季档位没有这个键 ⇒ 用 0 兜底（`?? 0`），中性档案同理。
     deepWinter: mix(a.deepWinter ?? 0, b.deepWinter ?? 0, t),
+    // ★ `rain`（雨势）也必须插值，否则又会重演本轮修掉的 `bud`/`pod` 那个病：
+    //   键缺失 ⇒ 读档方 `?? 0` ⇒ **过渡途中雨突然消失**，而不是渐变停。
+    //   （MEMORY 的老教训：漏一个键 = 上游算了、下游没人读。）
+    rain: mix(a.rain ?? 0, b.rain ?? 0, t),
   };
 }
 

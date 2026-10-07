@@ -31,7 +31,16 @@ const FILES = readdirSync(SRC).filter((f) => f.endsWith('.js'));
  *   萤火虫只在夜里飞、蝴蝶只在白天飞 —— 若也做成连续插值，
  *   会出现"中午有 12 只半透明的萤火虫在飞"，比跳变更糟。 */
 const GATE_ALLOWLIST = [
-  { file: 'pond.js', pattern: /if \(weather === 'sunny' && !night\)/, why: '蝴蝶只在白昼飞' },
+  /* ⚠️ 2026-10-07（P2-2）：`pattern` **不锚行尾的 `\)`**。
+   *   原 pattern 是 `/if \(weather === 'sunny' && !night\)/`，
+   *   而这行后来被追加了节气雨门控（`&& this.termVisual.rain < 0.05`）⇒
+   *   整条白名单被判「腐化」而报红—— 但门控本身**好好地在那儿**。
+   *   ⇒ 白名单要锚「这条门控还在」，不是锚「这行的字面量长什么样」。
+   *      门控**追加**条件是常态（多一个物候维度），不该让护栏逼着人把条件删回去。
+   * ⚠️ 顺带修 `why`：原文写「蝴蝶只在白昼飞」，但这行是 `drawWeather` 里的
+   *   **阳光十字**（`drawInsects` 的蝴蝶门控在另一行，写法是 `if (night || …)`）。
+   *   注释与代码不符是判据腐化的第二种形式 —— 只看它「有没有报错」是发现不了的。 */
+  { file: 'pond.js', pattern: /if \(weather === 'sunny' && !night/, why: '阳光十字只在白昼晴天飞（布尔门控，非幅度插值）' },
   { file: 'pond.js', pattern: /if \(night && season !== 'winter'\)/, why: '萤火虫只在非冬夜飞' },
   { file: 'pond.js', pattern: /if \(night \|\| weather === 'rainy'/, why: '雨天/雪天/冬��不画虫' },
   { file: 'turtles.js', pattern: /night=false/, why: '旧调用方兼容（内部已转daylight）' },
