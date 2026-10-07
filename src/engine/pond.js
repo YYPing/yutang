@@ -1082,27 +1082,39 @@ export class PondEngine extends KoiRenderer {
     const BLOOM_PERIOD = 34;
     const POD_GATE = 0.52;
 
-    /* ── 花苞（惊蛰…霜降都有，谷雨最多）───────────────────────────
+    /* ── 花苞（立夏…秋分都有，按`budKind` 分三种形态）───────────────
      * 纺锤形苞体 + 紧贴两侧的绿褐外苞片 + 下段绿萼杯 + 一根花梗。
      * ⚠️ 坐标口径：所有 y 都以**苞体底端**为 0，向上为负。
      *   2026-10-05 第一版把花梗终点画在 +0.40h、苞体底却落在 -0.34h
-     *   （`translate(0,-h*.40)` + 苞底 `+h*.06`），中间空了 0.74h ⇒ 梗与苞脱开。 */
+     *   （`translate(0,-h*.40)` + 苞底 `+h*.06`），中间空了 0.74h ⇒ 梗与苞脱开。
+     *
+     * ★★★ 2026-10-07 新增三形态（据江南荷花物候：形态必须随发育阶段走）：
+     *   TIGHT 尖苞（立夏）——「1–2 个尖尖花苞（粉尖）」：**瘦长**、笔直上举、鼓度低
+     *   OPENING 将开（小满–大暑）——「小荷才露尖尖角」：饱满、苞顶**微张露瓣**
+     *   WITHERED 残花枯瓣（立秋–寒露）——「残花枯瓣」：**褐色干枯**、瓣**外翻下垂**
+     *   ⚠️ 形态由 `v.budKind` 决定（`term-visual.js` 的 `BUD_KIND`），
+     *     **不是**由 `swell` 决定 —— `swell` 是「同一朵内部的微差」，
+     *     形态是「整档的阶段」，两个层级不能混。
+     */
+    const BUDK = v.budKind;
     for (let i = 0; i < v.budCount; i++) {
       const spot = FLORA_SPOTS(v.budCount, i, FLORA_BIAS.bud, BUD_TIGHT, 2, FLOWER_CLUSTERS);
-      /* ★★★ 花苞也吃开放度：谷雨 bud=8 且 raw=.043（几乎全闭），
-       *   白露 bud=3 且 raw=.021 —— 差别太小看不出来。
-       *   所以「苞的张开度」按 `i` 错开而不是只用一个全局值，
-       *   保证同一档里既有紧闭的也有将开的，才看得出「在等」。 */
+      /* ★★★ 花苞也吃开放度：同一档内「不同朵的开放度不同」（按序号错开）
+       *   ⇒ 看得出「在等」。⚠️ 形态（`BUDK`）是整档的阶段，与 `swell` 是两个层级。 */
       const swell = clamp(0.30 + 0.40 * ((i % 3) / 2) * (0.45 + 0.55 * OPEN), 0, 1);
-      manifest.bud.push({ x: spot.x, y: spot.y, r: spot.size * 0.82, swell });
+      manifest.bud.push({ x: spot.x, y: spot.y, r: spot.size * 0.82, swell, kind: BUDK });
       ctx.save();
+      /* ★★ 形态差异从这里开始 —— 位置/尺寸/倾斜（`tilt`）三者按形态改。
+       *   关键：**枯瓣要「外翻下垂」**，所以给它正 tilt（正向倒）而不是 0。 */
+      const isTight = BUDK === 'tight', isWithered = BUDK === 'withered';
       ctx.translate(spot.x * this.width, spot.y * this.height + Math.sin(t * 0.6 + spot.phase) * 1.1);
-      ctx.rotate(spot.tilt * 0.5);
-      /* ★ 苞体尺寸：宽高比从 `.36` → `.44` → **`.60`**（2026-10-05，8× 三轮迭代）。
-       *   ⚠️ `.36`（1:2.8 纺锤）8× 下读成**豌豆荚**—— 太瘦太尖。
-       *     `.46` 像**洋蓟**。真荷苞从侧面看是**饱满的卵形**（宽高约 1:1.7），
-       *     而且饱满程度要随 `swell`（接近开放）明显变大。 */
-      const h = spot.size * 0.82, w = h * 0.60;
+      ctx.rotate(spot.tilt * (isWithered ? 1.9 : isTight ? 0.25 : 0.5));
+      /* ★ 苞体尺寸：宽高比 `.60`（饱满卵形，8× 三轮迭代定稿）
+       *   ⚠️ 2026-10-07 按形态分档（**不改 `.60` 这个基准值**，只在两端调整）：
+       *     TIGHT 尖苞 `.44` —— 「尖尖花苞」要**瘦长**，.60 太胖会读成「将开」；
+       *     WITHERED 枯瓣 `.50` —— 干枯后横向收缩（失水），略瘦于盛期。
+       *   ⇒ 形态差异**不靠改基准值**，否则 8× 调出来的饱满手感会被破坏。 */
+      const h = spot.size * (isWithered ? 0.70 : 0.82), w = h * (isTight ? 0.44 : isWithered ? 0.50 : 0.60);
       /* 鼓度：越接近开放越鼓。系数从 `(0.74+0.44swell)` 调到 `(0.86+0.26swell)`
        *   —— 基准抬高（更饱满）、动态范围收窄（避免摆动时一会儿变圆一会儿变瘦）。 */
       const hw = w * (0.86 + 0.26 * swell);
@@ -1115,12 +1127,27 @@ export class PondEngine extends KoiRenderer {
       ctx.quadraticCurveTo(h * 0.13, h * 0.30, 0, 0);
       ctx.stroke();
       ctx.lineCap = 'butt';
-      /* 苞体：纺锤形 —— 下端略收、中段最鼓、顶端收尖（宽高比约 1:2.8）。 */
+      /* 苞体：纺锤形 —— 下端略收、中段最鼓、顶端收圆（宽高比见上）。
+       *
+       * ★★★ 2026-10-07 形态配色：**枯瓣褐变**是「残花」与「盛花」最直接的区分。
+       *   规范：白露「残花枯瓣」/ 秋分「莲蓬褐黑，花全谢」/ 寒露「枯莲蓬梗」。
+       *   ⚠️ 为什么只改颜色不改画法就够：形态差异已经由尺寸/倾斜承担，
+       *     而**颜色是 1× 远观时唯一能读到的信号** —— 1× 下苞只有几像素，
+       *     「粉 vs 褐」一眼可辨，「瘦长 vs 饱满」根本看不出来。
+       *   ⇒ 颜色是形态的**主信号**，尺寸是次信号（近看才有效）。
+       *   `green`（绿意）继续参与调和：夏档绿=0、秋冬档绿=1 ⇒ 枯档自动偏黄褐。 */
+      const WITHER_TIP = '#b9a878', WITHER_MID = '#9c8b5e', WITHER_ROOT = '#7d6f47';
       ctx.shadowColor = 'rgba(11,45,30,.20)'; ctx.shadowBlur = 5; ctx.shadowOffsetY = 2.5;
       const g = ctx.createLinearGradient(0, -h, 0, h * 0.10);
-      g.addColorStop(0, mixHex('#f0cdd6', '#b3a878', green));   /* 尖端：最浅 */
-      g.addColorStop(0.42, mixHex('#e2a8bc', '#9a9a63', green));
-      g.addColorStop(1, mixHex('#c88ba4', '#7f8a52', green));   /* 根部：深 */
+      if (isWithered) {
+        g.addColorStop(0, mixHex(WITHER_TIP, '#8d8358', green));
+        g.addColorStop(0.42, mixHex(WITHER_MID, '#7d7548', green));
+        g.addColorStop(1, mixHex(WITHER_ROOT, '#6b6440', green));
+      } else {
+        g.addColorStop(0, mixHex('#f0cdd6', '#b3a878', green));   /* 尖端：最浅 */
+        g.addColorStop(0.42, mixHex('#e2a8bc', '#9a9a63', green));
+        g.addColorStop(1, mixHex('#c88ba4', '#7f8a52', green));   /* 根部：深 */
+      }
       ctx.fillStyle = g;
       /* 苞体：**饱满的卵形** —— 下端略收、中段最鼓、顶端**圆钝**（不是收尖）。
        * ⚠️ 原路径两侧都 `bezierCurveTo(..., 0, -h)` 收成同一个尖点 ⇒ 放大后
@@ -1167,14 +1194,37 @@ export class PondEngine extends KoiRenderer {
       }
       /* 苞尖合拢处露出的一点内层花瓣（`swell` 大时才明显）。
        * ★ 位置随苞片上移：苞片尖端到 `-h*1.06`，这里必须跟着到 `-h*1.02`
-       *   之下、苞片之内（两片苞片中间的缝），否则被苞片盖住看不见。 */
-      if (swell > 0.30) {
+       *   之下、苞片之内（两片苞片中间的缝），否则被苞片盖住看不见。
+       * ★★ 2026-10-07：枯瓣**不做「微张露粉尖」** —— 那正是「将开」的定义。
+       *   枯瓣改成**外翻下垂的干瓣**：3 片向下弯的褐色窄瓣。 */
+      if (isWithered) {
+        /* 残花枯瓣：3 片**外翻下垂**的干瓣（尖朝外、尾朝上）。
+         * ⚠️ 必须明显区别于「粉尖内层」：形状（窄条 vs 三角）+ 颜色（褐 vs 粉）
+         *   + 位置（苞尖之上 vs 之内）三者同时改。 */
+        ctx.strokeStyle = mixHex('#a89765', '#7e7549', green);
+        ctx.lineWidth = Math.max(0.5, h * 0.045);
+        ctx.lineCap = 'round';
+        for (const a of [-0.62, 0, 0.62]) {
+          ctx.save();
+          ctx.rotate(a);
+          ctx.beginPath();
+          ctx.moveTo(hw * 0.12, -h * 0.92);
+          ctx.quadraticCurveTo(hw * 0.52, -h * 1.06, hw * 0.40, -h * 0.60);
+          ctx.stroke();
+          ctx.restore();
+        }
+        ctx.lineCap = 'butt';
+      } else if (swell > 0.30) {
+        /* TIGHT（尖苞）不给这一段：规范要的是「尖尖」——
+           露出的内瓣会让它读成「将开」。`swell` 高时才出现，且只在 OPENING 档。 */
+        if (!isTight) {
         ctx.fillStyle = mixHex('#f6dde4', '#c0b98c', green);
         ctx.beginPath();
         ctx.moveTo(0, -h * 1.02);
         ctx.quadraticCurveTo(hw * 0.16, -h * 0.88, hw * 0.10, -h * 0.66);
         ctx.quadraticCurveTo(hw * 0.05, -h * 0.84, 0, -h * 1.02);
         ctx.closePath(); ctx.fill();
+        }
       }
       /* ★ 下段**绿萼杯**：荷花花苞下半段是萼片包着的，不是全粉。
        *   ⚠️ 第一版用 3 个三角拼，只在苞体下面露出 2 个小尖（等于没画）。

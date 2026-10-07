@@ -32,7 +32,12 @@ const { execFileSync } = require('node:child_process');
 
 const ROOT = join(__dirname, '..');
 const OUT = join(ROOT, 'out', 'frost-check');
-const URL = 'http://127.0.0.1:5188/';
+/* ⚠️ 2026-10-07：加 `TERM_URL` 覆盖，与 `check-lotus.cjs` / `check-term-delta.cjs` 对齐。
+ *   起因：本文件原来把 URL **写死** `127.0.0.1`，而 Vite 只监听 `[::1]`（IPv6）
+ *   时 ⇒ `ERR_CONNECTION_REFUSED`。另外两把量具都有覆盖、只有这把没有 ⇒
+ *   「同一台 server 上量具时好时坏」，根因是**量具之间的 URL 不一致**，
+ *   很容易误判成回归。 */
+const URL = process.env.TERM_URL || process.env.URL || 'http://127.0.0.1:5188/';
 const PY = 'C:/Users/Y/.workbuddy/binaries/python/envs/default/Scripts/python.exe';
 const EXE = 'C:/Users/Y/AppData/Local/ms-playwright/chromium_headless_shell-1223/chrome-headless-shell-win64/chrome-headless-shell.exe';
 

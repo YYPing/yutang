@@ -66,6 +66,8 @@
     "check:term:delta": "node tools/check-term-delta.cjs",
     "check:term:fade": "node tools/check-term-fade.cjs",
     "check:lotus": "node tools/check-lotus.cjs",
+    "check:lotus:pheno": "node tools/check-lotus-pheno.mjs",
+    "check:lotus:pheno:falsify": "python tools/_pheno-falsify.py",
     "check:frost": "node tools/check-frost-ui.cjs",
     "check:rain": "node tools/check-rain-fall.cjs",
     "probe:desktop": "node tools/probe-desktop-boot.cjs",

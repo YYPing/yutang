@@ -36,7 +36,12 @@ const { execFileSync } = require('node:child_process');
 
 const ROOT = join(__dirname, '..');
 const OUT = join(ROOT, 'out', 'rain-check');
-const URL = 'http://127.0.0.1:5188/';
+/* ⚠️ 2026-10-07：加 URL 覆盖（本文件原来**写死** `127.0.0.1`）。
+ *   本目录的 URL 约定一度有三种并存：`URL` / `TERM_URL` / `argv[2]`，
+ *   而 Vite 只监听 `[::1]`（IPv6）时写死 `127.0.0.1` 的量具全部
+ *   `ERR_CONNECTION_REFUSED` ⇒ 「同一台 server 上量具时好时坏」，
+ *   极易误判成画面回归。⇒ 现在**三把浏览器量具一律认 `TERM_URL`**。 */
+const URL = process.env.TERM_URL || process.env.URL || 'http://127.0.0.1:5188/';
 const PY = 'C:/Users/Y/.workbuddy/binaries/python/envs/default/Scripts/python.exe';
 const EXE = 'C:/Users/Y/AppData/Local/ms-playwright/chromium_headless_shell-1223/chrome-headless-shell-win64/chrome-headless-shell.exe';
 

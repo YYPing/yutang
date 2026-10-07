@@ -57,7 +57,10 @@ const { execFileSync } = require('node:child_process');
 
 const ROOT = join(__dirname, '..');
 const OUT = join(ROOT, 'out', 'daylight-check');
-const URL = 'http://127.0.0.1:5188/';
+/* ⚠️ 2026-10-07：加 URL 覆盖（原来**写死** `127.0.0.1`，Vite 只监听 `[::1]` 时连不上）。
+ *   本目录的 URL 约定曾三种并存（`URL` / `TERM_URL` / `argv[2]`），
+ *   现在浏览器量具一律认 `TERM_URL`，`URL` 保留为兼容别名。 */
+const URL = process.env.TERM_URL || process.env.URL || 'http://127.0.0.1:5188/';
 const PY = 'C:/Users/Y/.workbuddy/binaries/python/envs/default/Scripts/python.exe';
 const EXE = 'C:/Users/Y/AppData/Local/ms-playwright/chromium_headless_shell-1223/chrome-headless-shell-win64/chrome-headless-shell.exe';
 
