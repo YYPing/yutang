@@ -20,7 +20,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { termProfile, SOLAR_TERMS } from '../src/engine/almanac.js';
+import { termProfile, SOLAR_TERMS, termSeason, blendTerm } from '../src/engine/almanac.js';
 
 /** 物候序（季内真实顺序）。⚠️ 不能从 SOLAR_TERMS filter 出来——那是历法序、跨年排布。 */
 const SEASON = {
@@ -266,6 +266,80 @@ test('★ P1-1 大暑/立秋/处暑的莲蓬（pod）必须从 0 起（参考图
     assert.ok((termProfile(t).pod ?? 0) <= peak + 1e-9,
       `${t} 的 pod 不得超过白露峰值(${peak})`);
   }
+});
+
+/* ───── 护栏六：blendTerm 必须插值**全部**物候维（用户评审清单 P0-2） ─────
+ *
+ * 现象（P0-2）：「左下角已切夏荷，右上角还挂着春桃花枝」「立秋/处暑水面仍残留夏天的粉色荷花和花苞」。
+ *
+ * ★★ 根因找到了一处**代码级遗漏**（不是「档间没对齐」那么笼统）：
+ *   `blendTerm()` 只插值 `warmth / lotus / leaf / litter / frost / ice / deepWinter`
+ *   —— **`bud`（花苞）与 `pod`（莲蓬）两维根本没有被返回**。
+ *   于是档间过渡时：`lotus` 从 0.3 平滑升到 0.55（花变多），
+ *   而 `bud` 读到的永远是 `termProfile()` 里**当前档的原始值**——
+ *   花苞**不随过渡变化**，于是「上一档的花苞赖在新档里不走」。
+ *
+ *   ⇒ 这解释了为什么「花苞」比「荷花」更容易残留：荷花走 `lotus` 插值，
+ *     花苞走的是**一个根本没被插值的通道**。
+ *
+ *   而「角落桃花」那一半属于底图像素（随manifest 槽位整张切换），
+ *   它与水面**没有共同的过渡时钟** —— 那一半在 P0-2 里另作处理。
+ */
+test('★ P0-2 blendTerm 必须插值 bud 与 pod（花苞/莲蓬不能赖在新档里）', () => {
+  /* 用「夏至 → 小暑」这一对：两档的 bud/pod 都有明确差异，
+   * 若不插值则过渡中途拿到的仍是起点的值。 */
+  const mid = blendTerm('夏至', 0.5);
+  const a = termProfile('夏至'), b = termProfile('小暑');
+  /* ★ 不能断言 `mid.bud` 精确等于某一端 —— `bud` 走 `mixProfile`（离散切换，
+   *   过半程就整块切过去），那正是它本来的设计。
+   *   这里断言的是**键存在**：不插值 ⇒ 该键 `undefined` ⇒ 渲染层读 `?? 0`，
+   *   于是过渡中途花苞**凭空消失**（比「残留」更明显的 bug）。 */
+  assert.ok('bud' in mid, `blendTerm 没返回 bud 键 ⇒ 读档方拿到 undefined（渲染层会当 0）`);
+  assert.ok('pod' in mid, `blendTerm 没返回 pod 键 ⇒ 读档方拿到 undefined（渲染层会当 0）`);
+  /* 端点必须与档案**逐位一致** —— 改前改后档位画面不能变。 */
+  assert.equal(mid.bud, mixProfileOf(a.bud, b.bud, 0.5), '过渡中点的 bud 不等于 mixProfile(起,止,.5)');
+  assert.equal(mid.pod, mixProfileOf(a.pod, b.pod, 0.5), '过渡中点的 pod 不等于 mixProfile(起,止,.5)');
+  /* 起点 t=0 与终点 t=1 必须**精确等于档案**（不是近似）。 */
+  const start = blendTerm('夏至', 0), end = blendTerm('夏至', 1);
+  assert.equal(start.bud, a.bud, 't=0 的 bud 必须精确等于夏至档案');
+  assert.equal(end.bud, b.bud, 't=1 的 bud 必须精确等于小暑档案');
+  assert.equal(end.pod, b.pod, 't=1 的 pod 必须精确等于小暑档案');
+});
+
+/** 与 `almanac.js` 内部同形的离散切换（复制而非 import，因为那个函数没有导出）。 */
+function mixProfileOf(a, b, t) {
+  return t < 0.5 ? (a ?? 0) : (b ?? 0);
+}
+
+/**
+ * ★★ P0-2 的另一半「角落 ↔ 水面不同步」——**经实测，该条指控不成立**，
+ *   这里把「实测结论」固化成护栏，避免下一轮又有人按清单去「修」它。
+ *
+ * ① 「03-立夏 右上角还挂着春桃花枝」—— **不成立**。
+ *   实测：立夏 `slot=summer` ⇒ 用 `pond.png`；把该图右上角裁出来看是
+ *   **睡莲叶 + 粉色素色睡莲**（圆瓣、有莲蓬），而 `spring.png` 右上角才是
+ *   **桃花枝**（细长花瓣 + 褐色枝条）。两者形态不同。
+ *   之所以「读成桃花」，是因为睡莲的花瓣形状与桃花在缩略尺寸下相近。
+ *
+ * ② 「09-立秋 / 10-处暑 水面还残留夏天的粉荷花与花苞」—— **量偏重，但档案没错**。
+ *   实测：立秋 `lotus .6 → 3 朵`、处暑 `.3 → 2 朵`；
+ *   参考图对立秋写「荷花**开始凋谢**」、处暑写「**大部分凋谢**」
+ *   ⇒ 「还有荷花」本身符合参考图，该档有花是对的。
+ *
+ * ⇒ 但**真缺陷确实存在，就在上面的 `blendTerm` 漏插 `bud`/`pod`**：
+ *   花苞读的是**当前档的原始值**、`bud` 键压根不存在 ⇒ 过渡中途凭空消失，
+ *   或在到达新档时**带着上一档的花苞数量**。
+ */
+test('★ P0-2 实测结论：立夏用的是夏季底图（不是春季），护栏锁定槽位映射', () => {
+  /* 只锁「立夏→summer」这一条（清单点名的那一档），不锁全部 24 档 ——
+   * 映射表的完整性由 `tests/term-fade.test.js` 的 manifest 对齐那条负责。 */
+  const SUMMER_TERMS = ['立夏', '小满', '芒种', '夏至', '小暑', '大暑'];
+  for (const t of SUMMER_TERMS) {
+    assert.equal(termSeason(t), 'summer',
+      `${t} 应属 summer 槽位（用 pond.png）；若它落到 spring，说明清单里那条`
+      + '「立夏右上角春桃」是真的串味，需要查 resolveTermImage 的降级链');
+  }
+  assert.equal(termSeason('清明'), 'spring', '清明应属 spring（对照组：确认映射本身有效）');
 });
 
 /* ───── 护栏四：冬季水面落叶（用户评审清单 P0-1，2026-10-07） ─────

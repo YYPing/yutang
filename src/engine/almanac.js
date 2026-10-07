@@ -161,6 +161,15 @@ export function blendTerm(term, t = 0) {
     warmth: mix(a.warmth, b.warmth, t),
     // 离散显隐：过了半程就整块切过去，避免"半朵荷花"
     lotus: mixProfile(a.lotus, b.lotus, t),
+    // ★★ 2026-10-07（P0-2）：`bud` / `pod` 原来**根本没被返回**（用户清单：
+    //   「立秋/处暑水面仍残留夏天的粉色荷花和**花苞**」）。
+    //   根因就在这里 —— `lotus` 走插值所以荷花会过渡，
+    //   而花苞读的是**当前档的原始值**、`bud` 键压根不存在 ⇒ `?? 0` ⇒ 过渡中途凭空消失。
+    //   两维都走与 `lotus` 相同的 `mixProfile`（离散切换，过半程整块切）
+    //   —— 花苞与莲蓬本来就是「整块显隐」的东西，不该做连续插值
+    //   （插一半的花苞/莲蓬在画面上读成「半朵」，是 MEMORY 里记过的反面教训）。
+    bud: mixProfile(a.bud, b.bud, t),
+    pod: mixProfile(a.pod, b.pod, t),
     leaf: mix(a.leaf, b.leaf, t),
     litter: mix(a.litter, b.litter, t),
     frost: mix(a.frost, b.frost, t),
