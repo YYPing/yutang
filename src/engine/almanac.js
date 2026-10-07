@@ -52,8 +52,19 @@ const TERM_PROFILE = Object.freeze({
   //   按真实物候差异拉开：夏至荷花最盛、叶片最密、暑热顶点；
   //   小暑入伏、午后雷雨 ⇒ 暑热略减、荷花开始收（lotus↓）而荷叶仍最盛（leaf 保持 1）；
   //   大暑一年最闷热、多雷暴，荷叶开始枯边（leaf↓）并偶有落叶（litter 从0 起）。
-  小暑: { warmth: .93,  lotus: .82, bud: 0.10,  pod: 0.00, leaf: .96, litter: 0,   frost: 0,   ice: 0 },
-  大暑: { warmth: .90,  lotus: .62, bud: 0.14,  pod: 0.00, leaf: .98, litter: .04, frost: 0,   ice: 0 },
+  //
+  // ★★ 2026-10-07（P1-1「峰值节气做成了低谷」）：夏至 5 朵 → 大暑仅 3 朵，
+  //   一年最热档荷量比夏至少 40%，读成「盛极转衰」。两处修正：
+  //   ① `pod` 大暑从 0 起（小暑 .05 / 大暑 .18）——
+  //   参考图 `REF_POND` 明确写「大暑 = 荷花仍盛开·**开始零星出现黄绿莲蓬**」，
+  //   而改前大暑 `pod:0`，那个**大暑的标志性形态整个缺失**。
+  //   莲蓬是独立循环（`drawLotus` 的 `for i<podCount`），**不与荷花抢名额**，
+  //   所以加它不会挤掉荷花。
+  //   ② `lotus` 小暑 .82→.86 / 大暑 .62→.78，让三伏天的高温与荷量同向。
+  //   ⚠️ 峰值**必须留在夏至**（护栏断言「夏至 ≥ 小暑/大暑」）——
+  //   绝不把大暑顶到 1.0，那会让夏至不再是峰值档，物候就反了。
+  小暑: { warmth: .93,  lotus: .86, bud: 0.10,  pod: .05,  leaf: .96, litter: 0,   frost: 0,   ice: 0 },
+  大暑: { warmth: .90,  lotus: .78, bud: 0.14,  pod: .18,  leaf: .98, litter: .04, frost: 0,   ice: 0 },
   立秋: { warmth: .82, lotus: .6, bud: 0.22,  pod: 0.10,  leaf: .88, litter: .1,  frost: 0,   ice: 0 },
   处暑: { warmth: .76, lotus: .3, bud: 0.34,  pod: 0.22,  leaf: .75, litter: .3,  frost: 0,   ice: 0 },
   白露: { warmth: .66, lotus: .08, bud: 0.30,  pod: 0.55, leaf: .55, litter: .6,  frost: 0,   ice: 0 },
