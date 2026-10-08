@@ -60,64 +60,69 @@ export const TERM_SEASON = Object.freeze([
 const TERM_PROFILE = Object.freeze({
   // ── 春：钱叶期。**零花零苞**，只有浮叶逐档变大 ──
   //春分「2–3 枚极小圆钱叶」⇒ leaf .14×22=3。
-  春分: { warmth: .58, lotus: 0, bud: 0.00,  pod: 0.00,   leaf: .14, litter: 0,   frost: 0,   ice: 0 },
+  春分: { warmth: .58, lotus: 0, bud: 0.00,  pod: 0.00,   leaf: .14, standLeaf: 0, litter: 0,   frost: 0,   ice: 0 },
   //  清明「5–6 枚小圆浮叶」⇒ leaf .25×22=6。
-  清明: { warmth: .62, lotus: 0, bud: 0.00,  pod: 0.00,   leaf: .25, litter: 0,   frost: 0,   ice: 0 },
+  清明: { warmth: .62, lotus: 0, bud: 0.00,  pod: 0.00,   leaf: .25, standLeaf: 0, litter: 0,   frost: 0,   ice: 0 },
   //  谷雨「浮叶增多 + 冒 1–2 支尖尖立叶，**准备孕蕾**」⇒ bud 仍为 0。
   //  ⚠️ 原值 bud:.85（8 个苞）是把花期提前了 20 天，本轮归零。
-  谷雨: { warmth: .68, lotus: 0, bud: 0.00,  pod: 0.00,   leaf: .70, litter: 0,   frost: 0,   ice: 0 },
+  谷雨: { warmth: .68, lotus: 0, bud: 0.00,  pod: 0.00,   leaf: .70, standLeaf: .08, litter: 0,   frost: 0,   ice: 0 },
   //  立夏「立叶 4–5 片仍稀疏 + **1–2 个尖尖花苞**」⇒ bud .22×9=2、lotus 0（**只有苞，没有花**）。
   //  ⚠️ 原值 lotus:.3（2 朵全开）⇒ 立夏就开花，比规范早一档。
-  //  ⚠️⚠️ **规范内部的一处张力，本轮按可实现的方式处理并留记录**：
-  //  规范说立夏「立叶 4–5 片仍稀疏」，但同一张表说谷雨「浮叶增多」——
-  //  **「立叶」（挺出水面的叶柄叶）与「浮叶」（贴水钱叶/圆浮叶）是两种叶**，
-  //  而档案只有一个 `leaf` 通道把它们合并了，所以「4–5 片立叶」无法与
-  //  「谷雨已有十几片浮叶」同时成立。
-  //  ⇒ 本轮的处理：立夏 `leaf` 保持与谷雨同档（.68/.70 ≈ 15 片），
-  //    **「立叶」的挺水形态留给渲染层**（`drawLotus` 里叶柄高度随物候递进）。
-  //  ★ 若将来要严格还原，需要给档案**新增 `standLeaf`（立叶数）通道** ——
-  //    那是独立改动，不该顺手塞进本轮。
-  立夏: { warmth: .74, lotus: 0, bud: 0.22,  pod: 0.00,   leaf: .68, litter: 0,   frost: 0,   ice: 0 },
+  //
+  //★★★ 2026-10-08（层③）**新增 `standLeaf` 通道，兑现这条挂了两轮的待办**。
+  //   规范内部原本有一处张力：立夏「立叶 4–5 片仍稀疏」但谷雨「浮叶增多」——
+  //   **「立叶」（挺出水面的叶柄叶）与「浮叶」（贴水的钱叶/圆浮叶）是两种叶**，
+  //   而档案只有一个 `leaf` 通道把它们合并了 ⇒ 「4–5 片立叶」与
+  //   「谷雨已有十几片浮叶」**无法同时成立**，上一轮只能把立夏的 `leaf`
+  //   压回与谷雨同档（.68/.70 ≈ 15 片）来回避这个矛盾。
+  //   ⇒ 现在两个通道各管一种叶，立夏 `leaf`（浮叶）保持 .68，
+  //     `standLeaf`（立叶）按规范取 4–5 片，两句话就都成立了。
+  //
+  //  ⚠️⚠️ **加通道必须同步四处，漏一处就是P0-2 那个病**（上游算了、下游没人读）：
+  //     ① 本档案 24 档 ② `blendTerm` 的插值 ③ `term-visual` 的翻译与输出
+  //     ④ `pond.js` 渲染层 + `floraManifest` 自报（量具靠它）
+  //立夏: 4–5 片 ⇒ .23×STAND_LEAF_MAX(20)=4.6→5。取 .22 ⇒ 4.4→4，两档都在区间内。
+  立夏: { warmth: .74, lotus: 0, bud: 0.22,  pod: 0.00,   leaf: .68, standLeaf: .22, litter: 0,   frost: 0,   ice: 0 },
   //  小满「立叶 7–8 片 + 花苞 3–4 + **初开 1 朵**」⇒ lotus .21×9=2 档、round 得 2；
   //  取 .12×9=1.08→1 朵（更贴合「初开 1 朵」），苞 .39×9=4。
-  小满: { warmth: .80, lotus: .12, bud: 0.39,  pod: 0.00,   leaf: .84, litter: 0,   frost: 0,   ice: 0 },
+  小满: { warmth: .80, lotus: .12, bud: 0.39,  pod: 0.00,   leaf: .84, standLeaf: .38, litter: 0,   frost: 0,   ice: 0 },
   //  芒种「初开 2–3 朵，花苞 4–5」⇒ 3 朵 / 5 苞。
-  芒种: { warmth: .86, lotus: .34, bud: 0.55,  pod: 0.00,   leaf: .93, litter: 0,   frost: 0,   ice: 0 },
+  芒种: { warmth: .86, lotus: .34, bud: 0.55,  pod: 0.00,   leaf: .93, standLeaf: .55, litter: 0,   frost: 0,   ice: 0 },
   // ★★★ 峰值档：**大暑**（2026-10-07 物候重排，原在夏至）。
   //   夏至「盛花前夜 · 盛开 3–4 朵，花苞 5–6」⇒ 4 朵 / 6 苞。
   //   ⚠️ 绝不能撞1：夏至与小暑/大暑若都是 .95 以上，round 后会与邻档同朵数
   //     ⇒ 零贡献（`LEAF_MAX` 撞顶是同一类饱和，**靠改 MAX 解决不了**，
   //     只能让档案峰值不撞 1，给邻档留出余量）。
-  夏至: { warmth: .99,  lotus: .45, bud: 0.62,  pod: 0.00,   leaf: .95, litter: 0,   frost: 0,   ice: 0 },
+  夏至: { warmth: .99,  lotus: .45, bud: 0.62,  pod: 0.00,   leaf: .95, standLeaf: .68, litter: 0,   frost: 0,   ice: 0 },
   /* ★ 小暑「**盛花期始**」：盛开 5–6 朵、花苞多、荷叶茂密盖水 60%。
    *   lotus .62×9=5.58→**6 朵**；leaf .97×22=21片（盖水约 60%）。 */
-  小暑: { warmth: .93,  lotus: .62, bud: 0.40,  pod: 0.05,  leaf: .97, litter: 0,   frost: 0,   ice: 0 },
+  小暑: { warmth: .93,  lotus: .62, bud: 0.40,  pod: 0.05,  leaf: .97, standLeaf: .72, litter: 0,   frost: 0,   ice: 0 },
   /* ★★ 大暑「**盛花顶峰**」：盛开 7–8 朵、荷叶盖水 80%、最深绿。
    *   lotus .88×9=7.92→**8 朵**（全 24 档最多）· leaf 1.00×22=**22 片**（满池）。
    *   ⚠️ `leaf` 撞 1.0 ⇒ 22 片，与小暑 21 只差 1 片。**这是允许的**：
    *     规范明确说大暑「荷叶盖水 80%」本就是满池，
    *     小暑与之的区分靠**花数**（6 vs 8）与**花苞数**（4 vs 3）。
    *   ⚠️ 莲蓬：大暑「开始零星出现」⇒ pod .12×6=1（`POD_MAX` 已从 5 提到 6）。 */
-  大暑: { warmth: .90,  lotus: .88, bud: 0.30,  pod: 0.12,  leaf: 1.0, litter: 0,   frost: 0,   ice: 0 },
+  大暑: { warmth: .90,  lotus: .88, bud: 0.30,  pod: 0.12,  leaf: 1.0, standLeaf: .70, litter: 0,   frost: 0,   ice: 0 },
   /* ★ 立秋「**花始谢**」：盛开 2–3 朵 + **2–3 个绿莲蓬**，荷叶仍密、边缘微焦。
    *   ⇒ 花从 8 朵**退到 3 朵**、莲蓬从 1**升到 3**（花让位给蓬）。
    *   ⚠️ 原值 lotus:.6 ⇒ round 后仍有 5 朵**全开**荷花 =「满池夏荷」，
    //     这正是用户说的「立秋/处暑还留完整夏荷粉花，就是串味根源」。
   //   莲蓬要**绿**（未褐变）—— 视觉由渲染层 `drawLotus` 的 pod 形态承担。 */
-  立秋: { warmth: .82,  lotus: .34, bud: 0.18,  pod: 0.50,  leaf: .90, litter: .10, frost: 0,   ice: 0 },
+  立秋: { warmth: .82,  lotus: .34, bud: 0.18,  pod: 0.50,  leaf: .90, standLeaf: .62, litter: .10, frost: 0,   ice: 0 },
   /* ★ 处暑「**花稀**」：残花 1–2 朵、莲蓬 4–5、荷叶开始泛黄边。
    *   pod .75×6=4.5→**4–5 个**（`POD_MAX` 提到 6 才够表达）。 */
-  处暑: { warmth: .76,  lotus: .12, bud: 0.10,  pod: 0.75,  leaf: .75, litter: .30, frost: 0,   ice: 0 },
+  处暑: { warmth: .76,  lotus: .12, bud: 0.10,  pod: 0.75,  leaf: .75, standLeaf: .45, litter: .30, frost: 0,   ice: 0 },
   /* ★ 白露「**残花**」：荷叶半黄、残花枯瓣、莲蓬褐。
    *   lotus .05⇒1 朵残花；bud .22⇒2 个**残花枯瓣**
    *   （`budKind` 判成 WITHERED，因为 litter=.60 ≥ .30）。 */
-  白露: { warmth: .66,  lotus: .05, bud: 0.22,  pod: 0.60,  leaf: .50, litter: .60, frost: 0,   ice: 0 },
+  白露: { warmth: .66,  lotus: .05, bud: 0.22,  pod: 0.60,  leaf: .50, standLeaf: .28, litter: .60, frost: 0,   ice: 0 },
   /* ★ 秋分「残荷」：荷叶大半枯黄、莲蓬褐黑、**花全谢**（lotus 归零）。 */
-  秋分: { warmth: .58,  lotus: 0, bud: 0.14,  pod: 0.78,   leaf: .32, litter: 1,   frost: 0,   ice: 0 },
+  秋分: { warmth: .58,  lotus: 0, bud: 0.14,  pod: 0.78,   leaf: .32, standLeaf: .15, litter: 1,   frost: 0,   ice: 0 },
   /* ★ 寒露「枯荷」：荷叶卷边褐败、**只剩枯莲蓬梗**。 */
-  寒露: { warmth: .48,  lotus: 0, bud: 0.06,  pod: 0.85,   leaf: .20, litter: .9,  frost: .2,  ice: 0 },
+  寒露: { warmth: .48,  lotus: 0, bud: 0.06,  pod: 0.85,   leaf: .20, standLeaf: .08, litter: .9,  frost: .2,  ice: 0 },
   /* ★ 霜降「**霜打枯荷**」：残梗挺立 + 白霜（白霜由 `frost` 通道承担）。 */
-  霜降: { warmth: .38,  lotus: 0, bud: 0.00,  pod: 0.72,   leaf: .12, litter: .7,  frost: .8,  ice: .15 },
+  霜降: { warmth: .38,  lotus: 0, bud: 0.00,  pod: 0.72,   leaf: .12, standLeaf: .03, litter: .7,  frost: .8,  ice: .15 },
   //★ `litter`（水面落叶）2026-10-07 修订（用户评审清单 P0-1「擦干净冬季水面残留的橙黄枫叶」）。
   //
   //   原值：立冬 .5 / 小雪 .3 / 大雪 .15 / 冬至 .12 / 小寒 .1 / 大寒 .08
@@ -130,7 +135,7 @@ const TERM_PROFILE = Object.freeze({
   //   ⇒ 正解是「**立冬留少量枯叶 + 小雪起清零**」，而不是「全冬归零」：
   //     违和感的真正来源是**橙红**（暖色高饱和压在冷蓝/雪白背景上），
   //     数量只是表象。颜色那一刀在 `scenery.js` 的 `leafSprite`（冬季枯叶色）。
-  立冬: { warmth: .28, lotus: 0, bud: 0.00,  pod: 0.40,   leaf: .1,  litter: .18, frost: 1,   ice: .4,  deepWinter: .20 },
+  立冬: { warmth: .28, lotus: 0, bud: 0.00,  pod: 0.40,   leaf: .1, standLeaf: 0,  litter: .18, frost: 1,   ice: .4,  deepWinter: .20 },
   //★★ 2026-10-07 荷花物候重排：小雪 `leaf` .05 → **0**（规范「小雪–大寒 水面无叶」）。
   //   原值 .05 ⇒ `Math.round(.05*22)=1` —— 水面还飘着**一片枯荷叶**，
   //   而用户清单明写「现在冬组水面的褐色残荷枯叶应清掉」。
@@ -139,8 +144,8 @@ const TERM_PROFILE = Object.freeze({
   //     ⇒ 「小雪还有 1 片叶」= **枯荷还浮在水上**，与规范直接冲突。
   //   ★ 同理 `pod`（莲蓬）小雪 .22 ⇒ 1 个，是「水下休眠·冰下不可见」的滞后残留，
   //     但莲蓬是**挺水的枯梗**（霜降/寒露都在画），保留；量具对它 `pod:null` 不判。
-  小雪: { warmth: .20, lotus: 0, bud: 0.00,  pod: 0.22,   leaf: 0,   litter: 0,   frost: 1,   ice: .7,  deepWinter: .48 },
-  大雪: { warmth: .12, lotus: 0, bud: 0.00,  pod: 0.08,   leaf: 0,   litter: 0,   frost: 1,   ice: 1,   deepWinter: .74 },
+  小雪: { warmth: .20, lotus: 0, bud: 0.00,  pod: 0.22,   leaf: 0, standLeaf: 0,   litter: 0,   frost: 1,   ice: .7,  deepWinter: .48 },
+  大雪: { warmth: .12, lotus: 0, bud: 0.00,  pod: 0.08,   leaf: 0, standLeaf: 0,   litter: 0,   frost: 1,   ice: 1,   deepWinter: .74 },
 // ★★★ 冬六档：这里是"用连续量表达离散事实"的反面教材，完整记录以免重犯。
 //
 //   起因：用户反馈「每个节气之间都一样」。冬六档（大雪/冬至/小寒/大寒）
@@ -158,9 +163,9 @@ const TERM_PROFILE = Object.freeze({
 //   （立冬起冰 → 小雪加厚 → 大雪冰封 → 三九最整 → 四九最脆），
 //   渲染层只做一次线性映射，不再二次加工。
 //   ★ 同一教训也写在 term-visual.js 的文件头。
-  冬至: { warmth: .10, lotus: 0, bud: 0.00,  pod: 0.05,   leaf: 0,   litter: 0,   frost: 1,   ice: 1,   deepWinter: .90 },
-  小寒: { warmth: .05, lotus: 0, bud: 0.00,  pod: 0.03,   leaf: 0,   litter: 0,   frost: 1,   ice: 1,   deepWinter: 1.0 },
-  大寒: { warmth: .02, lotus: 0, bud: 0.00,  pod: 0.02,   leaf: 0,   litter: 0,   frost: 1,   ice: .95, deepWinter: .97 },
+  冬至: { warmth: .10, lotus: 0, bud: 0.00,  pod: 0.05,   leaf: 0, standLeaf: 0,   litter: 0,   frost: 1,   ice: 1,   deepWinter: .90 },
+  小寒: { warmth: .05, lotus: 0, bud: 0.00,  pod: 0.03,   leaf: 0, standLeaf: 0,   litter: 0,   frost: 1,   ice: 1,   deepWinter: 1.0 },
+  大寒: { warmth: .02, lotus: 0, bud: 0.00,  pod: 0.02,   leaf: 0, standLeaf: 0,   litter: 0,   frost: 1,   ice: .95, deepWinter: .97 },
   // ★★ 2026-10-07 新增 `rain`（雨势）维（P2-2「雨水不下雨」）。
   //   ★ 为什么雨势必须挂在**节气档案**上，而不能挂在 `weather` 上：
   //     `drawWeather` 里雨是**天气门控**（`weather==='rainy'`），而天气来自
@@ -171,7 +176,7 @@ const TERM_PROFILE = Object.freeze({
   //     雨同理：雨天在此基础上加量，非雨天只要 `rain>0` 就画。
   //   取值依据（参考图 `REF_POND`）：雨水「残雪初融·水底新芽」= 湿冷有雨，
   //   而惊蛰「嫩绿新叶展开」= 雨季未至、只有零星细雨 ⇒ 显著低于雨水。
-  立春: { warmth: .30, lotus: 0, bud: 0.00,  pod: 0.00,   leaf: 0,    litter: .15, frost: .6,  ice: .45 , deepWinter: .45, rain: .25 },
+  立春: { warmth: .30, lotus: 0, bud: 0.00,  pod: 0.00,   leaf: 0, standLeaf: 0,    litter: .15, frost: .6,  ice: .45 , deepWinter: .45, rain: .25 },
   // ★★ 2026-10-07 物候重排：雨水/惊蛰的 `bud` 与 `leaf` **双双归零**。
   //   江南物候：立春「藕根萌动·**无叶无花**」→ 雨水「萌动·无叶无花·水面有雨痕」
   //   → 惊蛰「出芽前夜·无叶无花·泥面隐约小绿点」。
@@ -179,14 +184,17 @@ const TERM_PROFILE = Object.freeze({
   //     画面信息全部交给 `rain`（雨水=1 的雨丝）与 `frost`（残雪）。
   //   ⚠️ 旧值 bud .12/.45 + leaf .2/.17 来自参考图「嫩绿新叶展开·零星花苞」，
   //     **与真实物候冲突**（钱叶要到春分才初浮）—— 已按用户裁决归零。
-  雨水: { warmth: .40, lotus: 0, bud: 0.00,  pod: 0.00,   leaf: 0,    litter: .1,  frost: .2,  ice: .12 , deepWinter: .12, rain: 1   },
+  雨水: { warmth: .40, lotus: 0, bud: 0.00,  pod: 0.00,   leaf: 0, standLeaf: 0,    litter: .1,  frost: .2,  ice: .12 , deepWinter: .12, rain: 1   },
   // ★ leaf 归零（2026-10-07）。此前 .35→.17 的两次调整都是在**错误前提**下做的 ——
   //   当时以为「惊蛰只有芽、到谷雨才铺满」，实际上惊蛰连芽都还没浮出水面。
-  惊蛰: { warmth: .50, lotus: 0, bud: 0.00,  pod: 0.00,   leaf: 0,    litter: 0,   frost: 0,   ice: 0, rain: .35 },
+  惊蛰: { warmth: .50, lotus: 0, bud: 0.00,  pod: 0.00,   leaf: 0, standLeaf: 0,    litter: 0,   frost: 0,   ice: 0, rain: .35 },
 });
 
-/** 找不到时的中性档案（比"报错"好：画面照常，只是少了物候细节）。 */
-const NEUTRAL = Object.freeze({ warmth: .6, lotus: 0, leaf: .3, litter: .2, frost: 0, ice: 0, rain: 0 });
+/** 找不到时的中性档案（比"报错"好：画面照常，只是少了物候细节）。
+ *  ⚠️ 2026-10-08：**新增 `standLeaf`** —— 中性档案漏一个键，`termVisual` 读档就会
+ *  `?? 0` 兜底，行为上"看起来正常"（没有立叶而已），所以这类漏键**不会报错**，
+ *  只会让一整个形态在未知节气下静默消失。 */
+const NEUTRAL = Object.freeze({ warmth: .6, lotus: 0, leaf: .3, standLeaf: 0, litter: .2, frost: 0, ice: 0, rain: 0 });
 
 /** 线性插值。`t` 会被夹到 [0,1]，所以调用方不必自己保证。 */
 const mix = (a, b, t) => a + (b - a) * Math.max(0, Math.min(1, t));
@@ -239,6 +247,12 @@ export function blendTerm(term, t = 0) {
     bud: mixProfile(a.bud, b.bud, t),
     pod: mixProfile(a.pod, b.pod, t),
     leaf: mix(a.leaf, b.leaf, t),
+    // ★★ 2026-10-08（层③）新增 `standLeaf`（立叶）插值。
+    //   ⚠️ **必须一起插**，否则重演P0-2：键缺失 ⇒ 读档方 `?? 0` ⇒
+    //   立夏→小满的过渡途中立叶**凭空消失**，到新档时又带着上一档的立叶。
+    //   （本项目已栽三次同型：bud/pod 漏键 · 雨势漏键 · 现在轮到立叶。）
+    //   立叶是「连续增多的叶数」，与 `leaf` 同性质⇒ 走 `mix` 而不是 `mixProfile`。
+    standLeaf: mix(a.standLeaf ?? 0, b.standLeaf ?? 0, t),
     litter: mix(a.litter, b.litter, t),
     frost: mix(a.frost, b.frost, t),
     ice: mix(a.ice, b.ice, t),

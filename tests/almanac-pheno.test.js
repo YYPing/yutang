@@ -627,3 +627,111 @@ test('★ P0-1 冬季落叶必须用枯叶色，不得与秋天共用橙红（�
   assert.ok(!/LITTER_FALLBACK\[o\?\.season\]\?\?[1-9]/.test(atmo),
     'atmosphere.js 的 litterTarget 兜底仍是 `??3` ⇒ season 键缺失时会静默回落 3 片');
 });
+/* ══════════════ 护栏十一：立叶通道的**消费链必须环环相扣**（2026-10-08 层③）
+ *
+ * ★★★ 本项目已**三次**栽在同一个形态上 —— 「加了量但下游没人读」：
+ *     ① `frost` 算了不画 ② `bud`/`pod` 漏键 ③ `rain` 漏键
+ * 链路：almanac.standLeaf → blendTerm 插值 → term-visual 翻译 → pond 渲染 → manifest 自报。
+ * ⚠️ 每一环漏掉都**不会报错**，只会让形态静默消失：
+ *     `?? 0` 兜底、插值时被跳过、门控没加上、manifest 没 push。
+ * ⇒ 这条护栏把**五环一起锁住**，因为它们全都不会自己暴露。
+ */
+test('★ 层③ 立叶通道消费链必须环环相扣（档案→blend→翻译层→渲染→manifest）', () => {
+  const alm = read('src/engine/almanac.js');
+  const vis = read('src/engine/term-visual.js');
+  const pnd = read('src/engine/pond.js');
+
+  /* ① 档案：必须有 standLeaf 维，且春组三档为 0（钱叶期不该有立叶）。 */
+  assert.match(alm, /standLeaf:\s*\.\d/, 'almanac 档案缺 standLeaf 维');
+  for (const t of ['立春', '雨水', '惊蛰']) {
+    assert.match(alm, new RegExp(t + ':\\s*\\{[^}]*standLeaf:\\s*0'),
+      t + ' 的 standLeaf 必须为 0 —— 江南物候：立叶要到谷雨才冒尖');
+  }
+  /* ② blendTerm：漏掉这一环 ⇒ 过渡途中立叶凭空消失（bud/pod/rain 都栽过这个）。 */
+  assert.match(alm, /standLeaf:\s*mix\(a\.standLeaf/,
+    'blendTerm 没插值 standLeaf ⇒ 立叶在过渡途中消失（bud/pod/rain 都栽过这个）');
+  /* ③ 翻译层：独立 MAX + 独立计数 + 输出。 */
+  assert.match(vis, /const STAND_LEAF_MAX = (\d+)/, 'term-visual 缺 STAND_LEAF_MAX');
+  assert.match(vis, /const standLeafCount = Math\.round\(clamp01\(p\.standLeaf \?\? 0\) \* STAND_LEAF_MAX\)/,
+    'term-visual 的 standLeafCount 必须读 p.standLeaf');
+  assert.match(vis, /standLeafCount,/, 'term-visual 的输出对象缺 standLeafCount');
+  /* ④ 渲染层 + 门控：立叶要在 drawLotus 里画，且 render 的门控要考虑它。 */
+  assert.match(pnd, /standLeafCount/, 'pond.js 完全没读 standLeafCount（立叶不会被画）');
+  assert.match(pnd, /manifest\.standLeaf\.push/,
+    'floraManifest 没自报 standLeaf ⇒ 量具对「立叶到底画没画」完全无感');
+  /* ⑤ 中性档案：漏一个键只会让未知节气下形态静默消失，不报错。 */
+  assert.match(alm, /NEUTRAL[\s\S]{0,200}standLeaf/,
+    'NEUTRAL 中性档案缺 standLeaf ⇒ 未知节气下立叶静默消失');
+});
+
+/* ══════════════ 护栏十二：循环体内的局部常量**不得跨循环引用**（2026-10-08 层③）
+ *
+ * ★★★ 本项目已因这类事故**三次**白屏：
+ *     ① `BASE` 声明在叶脉段却被前面的叶柄段用（TDZ）
+ *     ② `NV` 声明在叶形之后却被叶形路径用（TDZ）
+ *     ③ **立叶段引用了浮叶循环里的 `u`**（ReferenceError，不是 TDZ）
+ *
+ * ★★ ③ 的症状最误导：抛的是 `u is not defined`，但因为抛在 `requestAnimationFrame`
+ *   回调里，**画布从未完成首帧** ⇒ 量具报的是
+ *   `waitForSelector: canvas timeout`，看起来像「页面没加载出来」，
+ *   而真实原因是渲染函数里一个未定义标识符。
+ *   ⇒ 光靠 `node --check` 查不出（它只做语法分析，不查作用域里的未定义引用）。
+ *
+ * 正解不是「小心一点」，而是**护栏**：立叶循环里凡是浮叶循环也声明过的
+ * 名字，必须**自己**再声明一次（同名、独立作用域）。
+ */
+test('★ 立叶循环不得引用浮叶循环内的局部 const（防 ReferenceError 白屏）', () => {
+  const pnd = read('src/engine/pond.js', { raw: true });
+  const lines = pnd.split('\n');
+  const floatLoop = lines.findIndex((l) => l.includes('for (let i = 0; i < pads; i++)'));
+  const standLoop = lines.findIndex((l) => l.includes('for (let i = 0; i < standPads; i++)'));
+  assert.ok(floatLoop > 0 && standLoop > floatLoop,
+    '定位不到两个叶循环（浮叶@' + floatLoop + ' / 立叶@' + standLoop
+    + '）—— 结构变了要同步改本护栏');
+
+  /* 用缩进定位循环结束：循环体内的收尾 `}` 缩进比 `for` 行深 2 空格。 */
+  const indentOf = (i) => (lines[i].match(/^\s*/) || [''])[0].length;
+  const endOf = (start) => {
+    const base = indentOf(start);
+    for (let i = start + 1; i < lines.length; i++) {
+      if (indentOf(i) === base && lines[i].trim() === '}') return i;
+    }
+    return -1;
+  };
+  const floatEnd = endOf(floatLoop);
+  const standEnd = endOf(standLoop);
+  assert.ok(floatEnd > floatLoop && standEnd > standLoop,
+    '循环结束定位失败（浮叶结束@' + floatEnd + ' / 立叶结束@' + standEnd + '）');
+
+  const floatInner = [...lines.slice(floatLoop, floatEnd).join('\n').matchAll(/const (\w+)/g)]
+    .map((m) => m[1]);
+  /* ⚠️⚠️ **必须剥掉注释**再统计声明，否则本护栏**恒绿假绿** ——
+   * 而原因是本文件顶部 `read()` 注释里写的那条，本次**复发了一次**：
+   *   我在立叶段的**警告注释**里写了 `const u = size / 28;` 这行示例
+   *   （说明"必须自己再声明一次"），于是「立叶段有没有声明 u」被判成 `true`
+   *   —— **断言被自己的注释命中**。
+   *   ★★ 第一版只剥了 `//` 行注释，结果**仍然假绿**：立叶段的警告是用
+   *     **多行块注释**写的（不是行注释），块注释内容整段留了下来。
+   *     ⇒ 两种注释都必须剥，否则只是从一种假绿换成另一种。
+   *   统计一律用剥净注释后的代码，与本文件其它护栏保持一致。 */
+  const stripComments = (s) => s
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')   /* 块注释（含跨行） */
+    .replace(/\/\/.*$/gm, '');          /* 行注释 */
+  const standSeg = stripComments(lines.slice(standLoop, standEnd + 1).join('\n'));
+  const declaredInStand = new Set([...standSeg.matchAll(/const (\w+)/g)].map((m) => m[1]));
+  /* 去掉「声明行」再看剩下用到哪些名字 —— 否则那行 u 的声明会命中自己。
+   * ⚠️ 本段刻意**不写** u 声明的字面量：本注释外层是块注释，
+   *   一旦里面出现裸反引号包裹的块注释结束符就会**提前闭合** ⇒ 整段变成代码
+   *   ⇒ SyntaxError。（MEMORY 铁律：注释里裸反引号会提前终止块注释。
+   *   本项目已因此报废过两次文件，第三次就是这里。） */
+  const standUses = standSeg.replace(/const\s+\w+\s*=[^;]+;/g, '');
+
+  /* 两个循环共享的名字（改动时要同步检查的一组）。 */
+  const SHARED = ['u', 'size', 'spot', 'tilt', 'phase'];
+  const missing = SHARED.filter((n) => floatInner.includes(n)
+    && !declaredInStand.has(n)
+    && new RegExp('(?<![\\w.])' + n + '(?![\\w])').test(standUses));
+  assert.deepEqual(missing, [],
+    '立叶循环引用了浮叶循环的局部 const：' + missing.join(', ')
+    + ' ⇒ 运行时 ReferenceError，而画布在 rAF 里抛错 ⇒ 量具报「canvas timeout」，看不出真因');
+});

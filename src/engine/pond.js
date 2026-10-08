@@ -219,7 +219,12 @@ function FLORA_SPOTS(n, i, bias = 1, tight = 1, clusterCount = 3, table = null) 
  *     荷叶放大到 23~40px 才够"巴掌大翠绿圆叶"（参考图）；
  *     莲蓬放大到 16~28px 才够「秋分·花谢莲蓬显现」这个需求主态。
  */
-const FLORA_BIAS = { leaf: 1.55, bud: 1.35, flower: 1.50, pod: 1.35 };
+const FLORA_BIAS = { leaf: 1.55, bud: 1.35, flower: 1.50, pod: 1.35,
+  /* ★ 立叶（2026-10-08 层③）：叶盘比浮叶小，但**要看得见**。
+   *   取 1.05 而不是「与浮叶同大」—— 立叶举高后视觉上会显得更小，
+   *   若画得和浮叶一样大，1× 下会读成「多了一堆浮叶」而不是「立起来的叶」。
+   *   又不能太小：立叶的判据是**叶影+立柄**，叶盘小到一定程度那两个特征就没了。 */
+  standLeaf: 1.05 };
 /* ★ 三类「非叶」形态的簇半径紧缩系数（2026-10-05）。
  *   **当前全为 1.0** —— 收拢是靠 `FLOWER_CLUSTERS`（换簇心）实现的，不是靠缩半径。
  *   留这个参数是因为：若日后想让花**再**聚一点，改这里比改簇心安全
@@ -440,7 +445,7 @@ export class PondEngine extends KoiRenderer {
      *   量具拿它当"本帧画了什么"就全错。
      *   这与 `atmosphere.syncLitter` 同一类问题：per-frame 的派生状态必须在 render 里重置，
      *   不能指望"生产者一定会被调用"。 */
-    this.floraManifest = { leaf: [], bud: [], flower: [], pod: [] };
+    this.floraManifest = { leaf: [], standLeaf: [], bud: [], flower: [], pod: [] };
     // ★ 落叶存量跟着节气档案走（2026-10-04 接入 `litterCount`）。
     //   为什么不在 `updateOptions` 里做：那里只跑一次，而档案在渐变模式下每帧都在变
     //   ⇒ 交节后落叶数会停在旧值（用户可见：冬至还在飘 3 片秋叶）。
@@ -475,7 +480,14 @@ export class PondEngine extends KoiRenderer {
      *   白露/秋分 leafCount 还有 9~12 但 lotus=0 bud=2 pod=4，旧的判断不会画；
      *   大雪~大寒 全为 0 才真的不画。 */
     const tv = this.termVisual;
-    if (tv.leafCount > 0 || tv.lotusCount > 0 || tv.budCount > 0 || tv.podCount > 0) this.drawLotus();
+    /* ⚠️⚠️ 2026-10-08（层③）：门控必须加 `standLeafCount`。
+     *   漏了会怎样：**谷雨/立夏这几档**（浮叶 15 片但立叶只有 2~4 片）倒还好，
+     *   但一旦某档 `leafCount=0 && standLeafCount>0`（春末某些组合可能发生），
+     *   `drawLotus()` **压根不被调用** ⇒ 立叶整档消失且**无任何报错**。
+     *   这与 MEMORY 里「冬档 manifest 残留上一帧」是同一类病：
+     *   **per-frame 派生状态的消费者必须自己判「有没有东西要画」**。 */
+    if (tv.leafCount > 0 || tv.standLeafCount > 0 || tv.lotusCount > 0
+        || tv.budCount > 0 || tv.podCount > 0) this.drawLotus();
     // ★★★ 冬季只剩**岸边浮霜**（2026-10-07，用户「删除冬天结冰和留着洞冒泡的设计」）。
     //   这是本项目**第三次**削减冬季：①2026-10-05 去掉整池冰层 ②2026-10-07 去掉冰下泉眼与蒸汽。
     //   ⇒ `drawWinter()` 现在是**单语义**方法（只调`drawFrost`），
@@ -1042,6 +1054,124 @@ export class PondEngine extends KoiRenderer {
       ctx.lineTo(Math.cos(gapAngle) * size * 0.34, Math.sin(gapAngle) * size * 0.34);
       ctx.stroke();
       ctx.restore();
+    }
+
+    /* ── 立叶（2026-10-08 层③新增）────────────────────────────────────
+     *
+     * ★★★ 为什么立叶必须**单独画**，不能只给浮叶加个偏移：
+     *   浮叶是**贴水**的（俯视 = 圆盘本身，压扁 0.70）；
+     *   立叶是**叶柄挺出水面**把叶盘举高（俯视 = 举高的叶盘 + 一段立柄 + 水面叶影）。
+     *   两者在画面上是**三种不同的东西**：
+     *     ① 水面的**叶影**（最关键的辨识特征 —— 立叶越高影子越明显）
+     *     ② **立柄**（一段可见的竖线，从水面到叶盘）
+     *     ③ **举高的叶盘**（比浮叶小一圈，且不是正圆 —— 侧视投影略窄）
+     *   只画③ 不画①② ⇒ 读成「池里飘着几片大小不一的浮叶」，
+     *   正好是规范要避免的「立叶/浮叶分不清」。
+     *
+     * ★ 投影方向：与既有`light-field.js` 的光向保持一致（右上偏亮），
+     *   所以影子甩在**左下方**。⚠️ 若以后改了光向，这里要跟着改。
+     *   影子参数 `len/0.55` 是「叶盘中心离水面的高度」的线性映射 ——
+     *   挺得越高影子越长，这是让「立叶」在 1× 下读得出来的**主要手段**。
+     *
+     * ⚠️ 复用 `FLOWER_CLUSTERS`（花簇心）而非浮叶簇心：
+     *   立叶在物候上与**花同期**（谷雨冒尖→盛夏最盛→秋退），与浮叶不同步；
+     *   落在花簇附近才符合真实荷塘（花与立叶混生在同一片水域）。
+     */
+    const standPads = v.standLeafCount;
+    for (let i = 0; i < standPads; i++) {
+      const spot = FLORA_SPOTS(standPads, i, FLORA_BIAS.standLeaf, BUD_TIGHT, 2, FLOWER_CLUSTERS);
+      /* ★ 立叶比浮叶**小一圈**：真立叶的叶盘是挺起来的，比浮叶略小且更挺。
+       *   比例 .78 是「一眼能看出立、但差别不夸张」的值（放大 8× 复核过）。 */
+      const size = spot.size * 0.78;
+      const lift = BASE * 0.62;                /* 叶盘中心离水面的高度 */
+      /* 摇曳：立叶比浮叶**摆动更明显**（它有柄、有高度，风的作用臂更长）。 */
+      const sway = Math.sin(t * 0.34 + spot.phase) * 0.055;
+      const cx = spot.x * this.width + sway * size * 2.4;
+      const cy = spot.y * this.height;
+
+      /* ① 水面叶影 —— 立叶的**主要辨识特征**。
+       *   不做模糊（`shadowBlur` 在这种小尺度上会糊成一团脏斑），
+       *   改用一层 alpha 很淡的椭圆 + 略微拉长。 */
+      ctx.save();
+      ctx.globalAlpha = 0.13;
+      ctx.fillStyle = leafLo;
+      ctx.translate(cx - lift * 0.42, cy + lift * 0.30);
+      ctx.rotate(-0.34 + sway * 0.5);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, size * 0.86, size * 0.44, 0, 0, TAU);
+      ctx.fill();
+      ctx.restore();
+
+      /* ② 立柄：从水面到叶盘的一段竖线。**根部要有一小段「入水」**，
+       *   否则叶子像浮在水面上而不是长在水里。 */
+      ctx.save();
+      ctx.strokeStyle = mixHex(leafLo, leafHi, 0.50);
+      ctx.lineWidth = Math.max(0.9, BASE * 0.050);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      /* 根部比叶盘中心**偏移一点**（立柄是斜着长的，不是垂直的），
+       *   偏移量随 sway 变 ⇒ 摆动时柄跟着甩。 */
+      ctx.moveTo(cx - sway * size * 1.6, cy + 2);
+      ctx.lineTo(cx, cy - lift * 0.72);
+      ctx.stroke();
+      ctx.restore();
+
+      /* ③ 举高的叶盘 —— 与浮叶同构但更小、压扁更轻（举起来后更接近正圆）。
+       *   ★ 这里**不重画整套叶脉**：立叶的叶盘在 1× 下只有 20~30px，
+       *   11 条主脉 + 33 条横脉画上去全在抗锯齿噪声里（与浮叶不同档），
+       *   只会把画面搞脏。正解是给一层简化的叶脉（4 条主脉）保持「有脉」的感觉。 */
+      ctx.save();
+      ctx.translate(cx, cy - lift * 0.72);
+      ctx.rotate(-0.34 + sway);
+      ctx.scale(1, 0.86);              /* 举高 ⇒ 透视压扁变轻 */
+      /* 叶背比叶面暗（举起来的叶子能看到一点背面）—— 这是立叶最强的立体线索。 */
+      const g = ctx.createRadialGradient(-size * .16, -size * .20, size * .05, 0, 0, size);
+      g.addColorStop(0, mixHex(leafHi, '#e8f0c8', 0.10));
+      g.addColorStop(0.45, mixHex(leafHi, leafLo, 0.14));
+      g.addColorStop(1, mixHex(leafHi, leafLo, 0.52));
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      /* ★ 立叶叶盘轮廓：**不是正圆** —— 举起来的叶有轻微的椭圆化与边缘起伏。 */
+      const NSV = 9;
+      for (let j = 0; j < NSV; j++) {
+        const a0 = (j / NSV) * TAU, a1 = ((j + 1) / NSV) * TAU;
+        const rr = size * (1 + 0.028 * Math.sin(j * 2.399963 + spot.phase));
+        if (j === 0) ctx.moveTo(Math.cos(a0) * rr, Math.sin(a0) * rr);
+        ctx.arc(0, 0, rr, a0, a1);
+      }
+      ctx.closePath();
+      ctx.fill();
+/* 简化叶脉：4 条主脉（见上面的说明—— 11 条在这个尺寸下是噪声） */
+    ctx.globalAlpha = 0.22;
+      ctx.strokeStyle = mixHex(leafHi, '#f2f6d8', 0.42);
+      /* ⚠️⚠️ 这里必须**自己**算 `u`，不能借用浮叶循环里的那个 ——
+       *   `const u = size/28` 声明在浮叶 `for` 循环体内（`drawLotus` 上半段），
+       *   立叶在另一个循环里 ⇒ 引用它会抛 `u is not defined`。
+       *   ★ 症状极具误导性：**抛的是 ReferenceError，但页面表现是「canvas 整个不出现」**
+       *     （渲染函数在 rAF 里抛 ⇒ 画布从未完成首帧），
+       *     量具报的却是 `waitForSelector: canvas timeout` —— 看起来像"页面没加载出来"。
+       *   这与 MEMORY 里 `BASE`/`NV` 那两次 TDZ 是同一类事故的**作用域版本**。 */
+      const u = size / 28;
+      ctx.lineWidth = Math.max(0.5, VEIN_W * u * 0.8);
+      for (let j = 0; j < 4; j++) {
+        const a = spot.phase + (j / 4) * TAU;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * size * 0.14, Math.sin(a) * size * 0.14);
+        ctx.lineTo(Math.cos(a) * size * 0.90, Math.sin(a) * size * 0.90);
+        ctx.stroke();
+      }
+      /* 中心窝 */
+      ctx.globalAlpha = 0.15; ctx.fillStyle = leafLo;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, size * 0.085, size * 0.060, 0, 0, TAU);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.restore();
+
+      /* ★ manifest 自报 —— 与浮叶同一个数组结构，量具据此验收。
+       *   ⚠️ `r` 报的是**叶盘**尺寸，而 `y` 是落水点 —— 立叶的判据量的是
+       *   「这个位置有没有东西画出来」，不是量它多高。 */
+      manifest.standLeaf.push({ x: spot.x, y: spot.y, r: size, lift });
     }
 
 

@@ -277,6 +277,20 @@ function segProgress(warmth, term) {
  *   MAX 保持 22：它就是"盛夏满池"的物理上限，改大反而会让画面浮叶过密。
  */
 const LEAF_MAX = 22;
+
+/**
+ * 立叶的数量上限（片）。2026-10-08（层③）新增。
+ *
+ * ★ 为什么不能复用 `LEAF_MAX = 22`：
+ *   立叶**比浮叶少**（大暑档 14 片立叶 vs 22 片浮叶）。共用 MAX 会让
+ *   档案里 `standLeaf: .68` 与 `leaf: .68` 落到同一个片数，
+ *   而这两种叶在画面上完全不是一回事（一个贴水、一个举高）⇒ 语义混淆。
+ *   独立 MAX 让两个通道的 0~1 各自对应自己的满值。
+ *
+ * ⚠️ 与浮叶同一条教训：`round(v*MAX)` 在 `v→1` 时必然饱和，
+ *   所以档案峰值也不能撞 1（当前大暑 `.70×20=14`，留了余量）。
+ */
+const STAND_LEAF_MAX = 20;
 const LOTUS_MAX = 9;
 const LITTER_MAX = 20;
 /* ★★ 2026-10-04 新增：荷花的两个形态通道。
@@ -404,6 +418,22 @@ export function TERM_VISUAL(profile, options) {
   // `lotus` 只额外决定**是否开花**。这样谷雨有浮叶无荷花、小满有花，
   // 而不会出现"有荷花但没有叶子"。
   const leafCount = Math.round(leaf * LEAF_MAX);
+  /* ★★ 2026-10-08（层③）新增 `standLeaf`（立叶）——**与浮叶是两种叶**。
+   *   江南荷塘的叶分两类：
+   *     · **浮叶**（`leaf`）= 贴水的钱叶/圆浮叶，俯视看到的是**圆盘本身**，
+   *       谷雨就有十几片（钱叶期）
+   *     · **立叶**（`standLeaf`）= 叶柄**挺出水面**、把叶盘举高，
+   *       俯视看到的是**举高的叶盘 + 一段立柄 + 水面的叶影**
+   *   规范原文：「谷雨 浮叶增多 + 冒 1–2 支尖尖**立叶**」「立夏 **立叶 4–5 片**仍稀疏」
+   *   ⇒ 两种叶的物候曲线**不同步**（浮叶早、立叶晚），合并成一个通道时
+   *     必然有一句规范无法成立—— 这就是本通道存在的理由。
+   *
+   * ⚠️ MAX 定 20 而不是复用 `LEAF_MAX=22`：
+   *   立叶比浮叶**少**（大暑 14 片立叶 vs 22 片浮叶），用同一个 MAX 会让
+   *   档案里`.68` 与 `.68` 语义混乱、且出现「立叶比浮叶多」的档案值。
+   *   独立 MAX 让两者的「0~1」各自对应自己的满值。
+   */
+  const standLeafCount = Math.round(clamp01(p.standLeaf ?? 0) * STAND_LEAF_MAX);
   /* ★ LOTUS_MAX 5 → 9（2026-10-07，江南荷花物候：大暑盛开 7–8 朵）。
    *   原 `Math.round(lotus * 5)` 是物理天花板：档案即便写 `lotus: 1` 也只到 5 朵
    *   ⇒ 「大暑只有 3 朵」的第一层病因不在档案值，在上限。
@@ -538,6 +568,7 @@ export function TERM_VISUAL(profile, options) {
     termTintHSV: hsv,
     causticInk,
     leafCount,
+    standLeafCount,   // ★2026-10-08 立叶（挺出水面的叶柄叶），与浮叶是两种叶
     lotusCount,
     budCount,
     budKind,   // ★2026-10-07 花苞形态（尖苞/将开/残花枯瓣），无苞时为 null

@@ -199,7 +199,7 @@ const pct = (x) => (x * 100).toFixed(3) + '%';
   for (const s of shots) {
     const p = await PROBE(s.f, s.bf, s.manifest);
     byTerm[s.term] = { ...s, ...p.res, maxDiff: p.maxDiff };
-    const line = ['leaf', 'bud', 'flower', 'pod']
+    const line = ['leaf', 'standLeaf', 'bud', 'flower', 'pod']
       .map((k) => `${k} ${byTerm[s.term][k].hits}/${byTerm[s.term][k].total}`).join('  ');
     console.log(`  ${s.term}  ${line}`);
   }
@@ -238,6 +238,7 @@ const pct = (x) => (x * 100).toFixed(3) + '%';
     ['flower', '大暑', '荷花盛放（大暑 8 朵）'],
     ['pod', '寒露', '莲蓬显现（寒露 5 个枯莲蓬）'],
     ['leaf', '大暑', '浮叶（大暑 22 片）'],
+    ['standLeaf', '夏至', '立叶挺水（夏至 14 片）'],
   ];
   for (const [kind, term, label] of phase) {
     const m = M(term, kind);
@@ -265,7 +266,7 @@ const pct = (x) => (x * 100).toFixed(3) + '%';
   /* ④ ★ 冬档必须真的什么都不画（需求「大雪·冬至 枯枝、叶面薄雪」）。
    *    注意判据是"落点总数为 0"而不是"没命中"——档案给 0 时根本不该有落点。 */
   const winter = ['大雪', '小寒'];
-  ok(winter.every((t) => ['leaf', 'bud', 'flower', 'pod'].every((k) => M(t, k).total === 0)),
+  ok(winter.every((t) => ['leaf', 'standLeaf', 'bud', 'flower', 'pod'].every((k) => M(t, k).total === 0)),
     '冬档（大雪/小寒）四种形态的落点数均为 0',
     winter.map((t) => `${t} 叶${M(t, 'leaf').total} 花${M(t, 'flower').total}`
       + ` 苞${M(t, 'bud').total} 蓬${M(t, 'pod').total}`).join('  '));
@@ -275,14 +276,14 @@ const pct = (x) => (x * 100).toFixed(3) + '%';
    *    像素判据（"有没有花"）对此**完全无感**，只有位置判据能抓到。 */
   const outside = [];
   for (const t of TERMS) {
-    for (const k of ['leaf', 'bud', 'flower', 'pod']) {
+    for (const k of ['leaf', 'standLeaf', 'bud', 'flower', 'pod']) {
       const m = byTerm[t][k];
       for (const p of m.per) if (!p.okHit) outside.push(`${t}/${k}`);
     }
   }
   /* 右下"桌面/沉浸"按钮区（x>0.62 && y>0.78）与左下面板带（y>0.88）内不得有落点 */
   const uiZone = [];
-  for (const t of TERMS) for (const k of ['leaf', 'bud', 'flower', 'pod']) {
+  for (const t of TERMS) for (const k of ['leaf', 'standLeaf', 'bud', 'flower', 'pod']) {
     for (const p of byTerm[t][k].per) {
       if ((p.x > 0.62 && p.y > 0.78) || p.y > 0.88) uiZone.push(`${t}/${k}@${p.x.toFixed(2)},${p.y.toFixed(2)}`);
     }
@@ -292,7 +293,7 @@ const pct = (x) => (x * 100).toFixed(3) + '%';
 
   /* ⑥ 分布：三簇必须横跨画面，不能全挤在一处 */
   const xs = [];
-  for (const k of ['leaf', 'bud', 'flower', 'pod']) for (const p of M('夏至', k).per) xs.push(p.x);
+  for (const k of ['leaf', 'standLeaf', 'bud', 'flower', 'pod']) for (const p of M('夏至', k).per) xs.push(p.x);
   const bands = new Set(xs.map((x) => Math.floor(x * 4)));
   ok(bands.size >= 3, '★ 落点横跨 ≥3 个四分栏（不是全挤在角落）',
     `四分栏命中 ${[...bands].sort().join(',')} / 共 4 栏，x∈[${Math.min(...xs).toFixed(2)}, ${Math.max(...xs).toFixed(2)}]`);
@@ -305,8 +306,8 @@ const pct = (x) => (x * 100).toFixed(3) + '%';
    *    ⚠️ **只在有 flora 的档之间比** —— 大雪/小寒四种形态全为 0，
    *    两档本来就该完全一样（这正是需求要的），把它们算进来必假红。
    *    踩过：这对相邻全零档让判据恒红，第��次误以为实现有 bug。 */
-  const painted = TERMS.filter((t) => ['leaf', 'bud', 'flower', 'pod'].some((k) => M(t, k).total > 0));
-  const sig = (t) => ['leaf', 'bud', 'flower', 'pod']
+  const painted = TERMS.filter((t) => ['leaf', 'standLeaf', 'bud', 'flower', 'pod'].some((k) => M(t, k).total > 0));
+  const sig = (t) => ['leaf', 'standLeaf', 'bud', 'flower', 'pod']
     .map((k) => byTerm[t][k].per.map((p) => p.n).join(',')).join('|');
   const dupPairs = [];
   for (let i = 1; i < painted.length; i++) {
@@ -319,7 +320,7 @@ const pct = (x) => (x * 100).toFixed(3) + '%';
   /* ⑨ ★ 反证自洽：**基线档**的 manifest 必须四项全空，而正常档非空。
    *    ⚠️ 踩过：拿 `s.manifest`（= **正常档**的）去验「基线应当为空」⇒
    *    拿正常档验基线，判据永远红。基线档的证据必须单独落一份 `baseManifest`。 */
-  const KINDS = ['leaf', 'bud', 'flower', 'pod'];
+  const KINDS = ['leaf', 'standLeaf', 'bud', 'flower', 'pod'];
   const baseEmpty = shots.every((s) => KINDS.every((k) => (s.baseManifest[k] || []).length === 0));
   ok(baseEmpty && painted.length >= 10, '★ 反证自洽：基线档零落点、正常档 ≥10 档有落点',
     `基线各档落点总数 ${shots.map((s) => KINDS.reduce((a, k) => a + (s.baseManifest[k] || []).length, 0)).join('/')}`

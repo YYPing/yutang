@@ -52,45 +52,55 @@ const ok = (c, label, detail) => {
 const section = (t) => console.log(`\n\x1b[1m${t}\x1b[0m`);
 
 /* ── 物候时间轴（用户提供的第二信源，**判据的唯一依据**）────────────
- * 格式：[节气, 荷叶数下限, 盛开花数, 花苞数, 莲蓬数, 花苞形态]
+ * 格式：[节气, 浮叶数区间, 立叶数区间, 盛开花数, 花苞数, 莲蓬数, 花苞形态]
  * `null` = 该项物候表未规定（只约束方向，不约束绝对值）。
  * ⚠️ 这张表是**独立于 `almanac.js` 的第二信源** ——
- *   改档案不会改它，所以它才有判据能力。 */
+ *   改档案不会改它，所以它才有判据能力。
+ *
+ * ★★2026-10-08（层③）新增 `standLeaf`（立叶）一维：
+ *   规范里「谷雨 冒 1–2 支尖尖**立叶**」「立夏 **立叶 4–5 片**仍稀疏」
+ *   ——**立叶与浮叶是两种叶**（贴水vs 挺水），物候曲线也不同步
+ *   （浮叶早、立叶晚）。上一轮档案只有一个 `leaf` 通道，
+ *   于是这两句话**不可能同时成立**，只能回避掉其中一句。
+ *   ⚠️ 加这一维的另一个理由：**不加判据 = 新通道完全裸奔**。
+ *     本项目已栽过「加了量但没人量」（雨势那次指标一位没动才发现量错了量），
+ *     这次档案加了通道就立刻配套判据，不留「看起来能用但没人在看」的形态。 */
 const PHENOLOGY = {
-  // 春：钱叶期，**零花零苞**
-  立春: { leaf: 0, lotus: 0, bud: 0, pod: 0, kind: null },
-  雨水: { leaf: 0, lotus: 0, bud: 0, pod: 0, kind: null },
-  惊蛰: { leaf: 0, lotus: 0, bud: 0, pod: 0, kind: null },
+  // 春：钱叶期，**零花零苞**；立叶也要到谷雨才冒尖
+  立春: { leaf: 0, standLeaf: 0, lotus: 0, bud: 0, pod: 0, kind: null },
+  雨水: { leaf: 0, standLeaf: 0, lotus: 0, bud: 0, pod: 0, kind: null },
+  惊蛰: { leaf: 0, standLeaf: 0, lotus: 0, bud: 0, pod: 0, kind: null },
   // ⚠️ 物候给的是**区间**（「2–3 枚极小圆钱叶」「5–6 枚小圆浮叶」）⇒ 必须写成区间。
   //   第一版写成精确值 `2`/`5` ⇒ 判据报「春分 3≠2」——**是判据把区间当点值了**，
   //   与「大暑 7~8 朵」那几行同一性质。`null` 表示该档此项只约束方向。
-  春分: { leaf: [2, 3], lotus: 0, bud: 0, pod: 0, kind: null },
-  清明: { leaf: [5, 6], lotus: 0, bud: 0, pod: 0, kind: null },
-  谷雨: { leaf: null, lotus: 0, bud: 0, pod: 0, kind: null },
+  春分: { leaf: [2, 3], standLeaf: 0, lotus: 0, bud: 0, pod: 0, kind: null },
+  清明: { leaf: [5, 6], standLeaf: 0, lotus: 0, bud: 0, pod: 0, kind: null },
+  // 谷雨「浮叶增多 + **冒 1–2 支尖尖立叶**，准备孕蕾」⇒ bud 仍为 0（花期未到）
+  谷雨: { leaf: null, standLeaf: [1, 2], lotus: 0, bud: 0, pod: 0, kind: null },
   // 夏：立叶→尖苞→初开→盛开→顶峰
-  立夏: { leaf: null, lotus: 0, bud: [1, 2], pod: 0, kind: BUD_KIND.TIGHT },
-  小满: { leaf: null, lotus: 1, bud: [3, 4], pod: 0, kind: BUD_KIND.OPENING },
-  芒种: { leaf: null, lotus: [2, 3], bud: [4, 5], pod: 0, kind: BUD_KIND.OPENING },
-  夏至: { leaf: null, lotus: [3, 4], bud: [5, 6], pod: 0, kind: BUD_KIND.OPENING },
-  小暑: { leaf: null, lotus: [5, 6], bud: null, pod: null, kind: BUD_KIND.OPENING },
-  大暑: { leaf: null, lotus: [7, 8], bud: null, pod: null, kind: BUD_KIND.OPENING },
+  立夏: { leaf: null, standLeaf: [4, 5], lotus: 0, bud: [1, 2], pod: 0, kind: BUD_KIND.TIGHT },
+  小满: { leaf: null, standLeaf: [7, 8], lotus: 1, bud: [3, 4], pod: 0, kind: BUD_KIND.OPENING },
+  芒种: { leaf: null, standLeaf: null, lotus: [2, 3], bud: [4, 5], pod: 0, kind: BUD_KIND.OPENING },
+  夏至: { leaf: null, standLeaf: null, lotus: [3, 4], bud: [5, 6], pod: 0, kind: BUD_KIND.OPENING },
+  小暑: { leaf: null, standLeaf: null, lotus: [5, 6], bud: null, pod: null, kind: BUD_KIND.OPENING },
+  大暑: { leaf: null, standLeaf: null, lotus: [7, 8], bud: null, pod: null, kind: BUD_KIND.OPENING },
   // 秋：花退坡、莲蓬接管
-  立秋: { leaf: null, lotus: [2, 3], bud: null, pod: [2, 3], kind: BUD_KIND.WITHERED },
-  处暑: { leaf: null, lotus: [1, 2], bud: null, pod: [4, 5], kind: BUD_KIND.WITHERED },
-  白露: { leaf: null, lotus: 0, bud: null, pod: null, kind: BUD_KIND.WITHERED },
-  秋分: { leaf: null, lotus: 0, bud: null, pod: null, kind: null },
-  寒露: { leaf: null, lotus: 0, bud: null, pod: null, kind: null },
-  霜降: { leaf: null, lotus: 0, bud: null, pod: null, kind: null },
-  // 冬：水面无叶
-  立冬: { leaf: null, lotus: 0, bud: 0, pod: null, kind: null },
+  立秋: { leaf: null, standLeaf: null, lotus: [2, 3], bud: null, pod: [2, 3], kind: BUD_KIND.WITHERED },
+  处暑: { leaf: null, standLeaf: null, lotus: [1, 2], bud: null, pod: [4, 5], kind: BUD_KIND.WITHERED },
+  白露: { leaf: null, standLeaf: null, lotus: 0, bud: null, pod: null, kind: BUD_KIND.WITHERED },
+  秋分: { leaf: null, standLeaf: null, lotus: 0, bud: null, pod: null, kind: null },
+  寒露: { leaf: null, standLeaf: null, lotus: 0, bud: null, pod: null, kind: null },
+  霜降: { leaf: null, standLeaf: null, lotus: 0, bud: null, pod: null, kind: null },
+  // 冬：水面无叶（立叶也归零—— 地上部分已枯，地下茎休眠）
+  立冬: { leaf: null, standLeaf: 0, lotus: 0, bud: 0, pod: null, kind: null },
   // 物候「小雪–大寒：**水面无叶**」⇒ 小雪也是 0片。
   // 第一版写 `null`（不判）⇒ 量具对「小雪还飘 1 片叶」完全无感，
   // 而那正是用户清单里「冬组水面的褐色残荷枯叶应清掉」那一类问题。
-  小雪: { leaf: 0, lotus: 0, bud: 0, pod: null, kind: null },
-  大雪: { leaf: 0, lotus: 0, bud: 0, pod: 0, kind: null },
-  冬至: { leaf: 0, lotus: 0, bud: 0, pod: 0, kind: null },
-  小寒: { leaf: 0, lotus: 0, bud: 0, pod: 0, kind: null },
-  大寒: { leaf: 0, lotus: 0, bud: 0, pod: 0, kind: null },
+  小雪: { leaf: 0, standLeaf: 0, lotus: 0, bud: 0, pod: null, kind: null },
+  大雪: { leaf: 0, standLeaf: 0, lotus: 0, bud: 0, pod: 0, kind: null },
+  冬至: { leaf: 0, standLeaf: 0, lotus: 0, bud: 0, pod: 0, kind: null },
+  小寒: { leaf: 0, standLeaf: 0, lotus: 0, bud: 0, pod: 0, kind: null },
+  大寒: { leaf: 0, standLeaf: 0, lotus: 0, bud: 0, pod: 0, kind: null },
 };
 
 const V = {};
@@ -101,11 +111,12 @@ const n = (v) => (Array.isArray(v) ? `${v[0]}~${v[1]}` : String(v));
 const hit = (actual, want) => (Array.isArray(want) ? actual >= want[0] && actual <= want[1] : actual === want);
 
 section('① 逐档对表（档案实况 vs 江南物候时间轴）');
-console.log('  节气   荷叶 花 苞 蓬  形态        物候要求（叶/花/苞/蓬/形态）');
+console.log('  节气   浮叶 立叶 花 苞 蓬  形态        物候要求（浮叶/立叶/花/苞/蓬/形态）');
 for (const t of SOLAR_TERMS) {
   const v = V[t], p = PHENOLOGY[t];
-  const req = p ? `${n(p.leaf)}/${n(p.lotus)}/${n(p.bud)}/${n(p.pod)}/${p.kind || '-'}` : '—';
-  console.log(`  ${t.padEnd(2)} ${String(v.leafCount).padStart(4)} ${String(v.lotusCount).padStart(2)}`
+  const req = p ? `${n(p.leaf)}/${n(p.standLeaf)}/${n(p.lotus)}/${n(p.bud)}/${n(p.pod)}/${p.kind || '-'}` : '—';
+  console.log(`  ${t.padEnd(2)} ${String(v.leafCount).padStart(4)} ${String(v.standLeafCount).padStart(4)}`
+    + ` ${String(v.lotusCount).padStart(2)}`
     + ` ${String(v.budCount).padStart(2)} ${String(v.podCount).padStart(2)}  `
     + `${(v.budKind || '-').padEnd(12)} ${req}`);
 }
@@ -116,14 +127,16 @@ for (const t of SOLAR_TERMS) {
   const p = PHENOLOGY[t];
   if (!p) continue;
   const v = V[t];
-  for (const k of ['leaf', 'lotus', 'bud', 'pod']) {
+  /* ★ 2026-10-08：`leaf` 与 `standLeaf` 是**两个键**（两种叶），
+   *   不能合在一起判 —— 否则量具对「立叶被当成浮叶重复计数」完全无感。 */
+  for (const k of ['leaf', 'standLeaf', 'lotus', 'bud', 'pod']) {
     if (p[k] === null || p[k] === undefined) continue;
     if (!hit(v[`${k}Count`], p[k])) {
       bad.push(`${t}.${k}: 实际 ${v[`${k}Count`]} ≠ 物候 ${n(p[k])}`);
     }
   }
 }
-ok(bad.length === 0, '所有档位的荷/花/苞/蓬数量都符合物候表',
+ok(bad.length === 0, '所有档位的浮叶/立叶/花/苞/蓬数量都符合物候表',
   bad.length ? bad.join('; ') : `${SOLAR_TERMS.length} 档全对`);
 
 section('③ 花苞形态判据（形态必须随发育阶段走）');
@@ -184,6 +197,41 @@ const winter = ['大雪', '冬至', '小寒', '大寒'].map((t) => V[t]);
 ok(winter.every((v) => v.leafCount === 0),
   '④g 大雪~大寒水面必须无叶', winter.map((v) => v.leafCount).join('/'));
 
+/* ═══ ④i / ④j 立叶专属判据（2026-10-08 层③新增）═══
+ *
+ * ★ 这两条是**层③存在的全部理由**。上一轮之所以只能用「立夏 `leaf` 压回谷雨同档」
+ *   来回避矛盾，正是因为**没有任何判据在管「立叶何时出现、有多少」**——
+ *   一个没人量的通道，等于没有通道。
+ *
+ * ④i「立叶必须晚于浮叶出现」验证的是**物候顺序**：
+ *   浮叶（钱叶）在春分就浮出水面了，立叶要等谷雨才冒尖 ——
+ *   真实荷塘正是这样：**先铺满浮叶，再从其中冒出错落的立叶**。
+ *   ⚠️ 若这条报红，说明有人把 `standLeaf` 随手写成了 `leaf` 的复制
+ *   （那两句话又合并回去了，本轮的改动等于没做）。
+ */
+const floatFirst = ['春分', '清明'].every((t) => V[t].leafCount > 0 && V[t].standLeafCount === 0)
+  && V['谷雨'].leafCount > 0 && V['谷雨'].standLeafCount > 0;
+ok(floatFirst,
+  '④i 立叶必须晚于浮叶出现（春分/清明只有浮叶，谷雨才冒立叶）',
+  `春分 浮${V['春分'].leafCount}/立${V['春分'].standLeafCount}`
+  + `  清明 浮${V['清明'].leafCount}/立${V['清明'].standLeafCount}`
+  + `  谷雨 浮${V['谷雨'].leafCount}/立${V['谷雨'].standLeafCount}`);
+
+/* ④j 立叶数量必须**逐档递增到盛夏再退坡**，且**峰值不超过浮叶**。
+ *   ⚠️ 后半句不是形式检查：立叶与浮叶若是同一个数量级，
+ *   1× 下会读成「满池都是同一种叶」—— 层③就白做了。
+ *   （大暑浮叶 22 / 立叶 14，比值 0.64。） */
+const standSeries = ['谷雨', '立夏', '小满', '芒种', '夏至', '小暑', '大暑'].map((t) => [t, V[t].standLeafCount]);
+const standRise = standSeries.every(([, c], i) => i === 0 || c >= standSeries[i - 1][1]);
+const standPeak = Math.max(...standSeries.map(([, c]) => c));
+const floatPeak = Math.max(...SOLAR_TERMS.map((t) => V[t].leafCount));
+ok(standRise, '④j-1 立叶必须逐档递增到盛夏',
+  standSeries.map(([t, c]) => `${t}=${c}`).join(' '));
+ok(standPeak < floatPeak && standPeak / floatPeak >= 0.4 && standPeak / floatPeak <= 0.8,
+  '④j-2 立叶峰值必须**明显少于**浮叶峰值（否则读成同一种叶）',
+  `立叶峰值 ${standPeak} / 浮叶峰值 ${floatPeak} = ${(standPeak / floatPeak).toFixed(2)}`
+  + `（合格区间 0.40~0.80）`);
+
 /* ④h ★ 归一化窗口必须跟着档案峰值走（`rawOpenness` 的老坑复发检查）。
  *   峰值档的 rawOpenness 必须是 1.000，而**不能有第二档也撞 1.000** ——
  *   撞顶会让「盛极」与「余花」在画面上无区别。 */
@@ -202,6 +250,13 @@ ok(!!mLotus && Number(mLotus[1]) === 9, 'LOTUS_MAX 必须是 9（大暑要 7–8
   `实际 ${mLotus ? mLotus[1] : '(找不到)'}`);
 ok(!!mPod && Number(mPod[1]) === 6, 'POD_MAX 必须是 6（处暑要 4–5 个）',
   `实际 ${mPod ? mPod[1] : '(找不到)'}`);
+
+/* ★★ 2026-10-08（层③）新增 ⑤c：`STAND_LEAF_MAX` 也要反查。
+ *   写死会怎样：若有人把 MAX 改成 22（复用浮叶的），立叶会与浮叶同数，
+ *   而画面上两种叶是不同的东西 ⇒ 判据恒绿、问题被埋到肉眼那一层才发现。 */
+const mStand = tvSrc.match(/const STAND_LEAF_MAX = (\d+)/);
+ok(!!mStand && Number(mStand[1]) === 20, '⑤c STAND_LEAF_MAX 必须是 20（立叶比浮叶少，不能复用 LEAF_MAX）',
+  `实际 ${mStand ? mStand[1] : '(找不到)'}`);
 
 /* ④b 的反向自检：若MAX 被改小，7–8 朵就不可达 ⇒ 必须报红。 */
 const maxAsNum = Number(mLotus[1]);
