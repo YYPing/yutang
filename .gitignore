@@ -42,3 +42,9 @@ wallpaper-test.cjs
 # ⚠️ 它硬编码了 5191 端口 + 本机绝对路径，与仓库量具的 5188 / TERM_URL 约定不一致，
 #   且功能已被 tools/_zoom-leaf.cjs（单朵放大）与 tools/_flora-pano.cjs（1× 全景）覆盖。
 tools/_iso2.cjs
+
+# 本地完整历史备份（git bundle）。
+# ⚠️ 不是产物而是**保险**：push 失败时它能保住全部 commit，
+#   换通道后 `git push <bundle> main` 一条命令补推。
+#   刻意不入库 —— 二进制1.7 MB 且每个开发者本地都有自己的一份。
+.git-bundles/
