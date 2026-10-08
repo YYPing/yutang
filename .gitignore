@@ -1,4 +1,20 @@
 # Dependencies & build output
+# 二进制资产：**入库**（2026-10-08 改）
+#
+# ★★★ 这条规则原来写的是「排除二进制，靠本地恢复或 LFS」——
+#   在**上游仓库**（cyberdaddyleo/yutang）成立，但在这个 fork 里两项都不成立：
+#     · 没有 `.gitattributes` ⇒ 没有 Git LFS；
+#     · 唯一能取回资产的东西在工作区**外**（`refs/fetch-assets.mjs`），
+#       而且它指向**上游的** raw 地址、不是本仓库。
+#   ⇒ 后果是 `git clone` 下来**跑不起来**：4 张底图、5 个音效、coast 主题图全部缺失，
+#   而 `term-images.js` 与 `audio/ambient.js` 硬引用它们。
+#   ⇒ 本项目改为**资产入库**，换取「clone 即跑」。下面只排除真正的构建产物与
+#     本地产物，逐条注明理由，不再有「以后会有人恢复」的悬空假设。
+#
+# 仍不入库的两类（刻意）：
+#   ① `electron/native/bin/` 与 `*.lib/*.exp/*.node` —— 本机编译的原生模块，
+#      换平台/换 Node 版本就失效，且可由 `electron-rebuild` 重建。
+#   ② `out/` `dist/` `work/` `release/` `.dist-old-*/` —— 构建与量具产物。
 node_modules/
 dist/
 out/
@@ -8,6 +24,7 @@ release/
 work/
 .dist-old-*/
 electron/native/bin/
+electron/native/include/
 .DS_Store
 *.log
 
@@ -16,18 +33,10 @@ electron/native/bin/
 .env.*
 !.env.example
 
-# Binary assets excluded from the text-only source repo
-# (images / audio / native libs are restored locally or via LFS)
-*.png
-*.webp
-*.wav
-*.ico
-*.icns
-*.node
-*.lib
-*.exp
-*.obj
-*.pdf
+# ⚠️ 不再全局排除 *.png / *.wav / *.webp —— 运行时资产必须入库（见上）。
+# 只挡截图类的临时 png（量具输出统一落在 out/，已由上面排除）：
+# 保留这一条是为了防止有人把截图丢在仓库根目录。
+/screenshot-*.png
 
 # Ad-hoc dev / screenshot scripts (not part of the source)
 fps.cjs
